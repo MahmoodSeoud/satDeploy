@@ -1,4 +1,4 @@
-"""Tests for sat-agent status command."""
+"""Tests for sat-agent."""
 
 import json
 import subprocess
@@ -152,3 +152,326 @@ class TestLoadConfig:
         missing = tmp_path / "missing.yaml"
         with pytest.raises(FileNotFoundError):
             load_config(missing)
+
+
+class TestDependencyResolution:
+    """Tests for dependency graph resolution."""
+
+    def test_get_dependents_finds_direct_dependents(self, test_config):
+        """Should find services that directly depend on given service."""
+        from sat_agent import get_dependents, load_config
+
+        config = load_config(test_config)
+        # controller depends on csp_server
+        dependents = get_dependents('csp_server', config)
+
+        assert 'controller' in dependents
+
+    def test_get_dependents_returns_empty_for_leaf(self, test_config):
+        """Should return empty list for service with no dependents."""
+        from sat_agent import get_dependents, load_config
+
+        config = load_config(test_config)
+        # Nothing depends on controller
+        dependents = get_dependents('controller', config)
+
+        assert dependents == []
+
+    def test_get_dependents_finds_transitive_dependents(self, test_config):
+        """Should find all transitive dependents."""
+        from sat_agent import get_dependents, load_config
+
+        config = load_config(test_config)
+        # param_handler -> csp_server -> controller
+        dependents = get_dependents('param_handler', config)
+
+        assert 'csp_server' in dependents
+        assert 'controller' in dependents
+
+    def test_get_stop_order_includes_service_and_dependents(self, test_config):
+        """Stop order should include service and all dependents, top-down."""
+        from sat_agent import get_stop_order, load_config
+
+        config = load_config(test_config)
+        # Deploying csp_server: must stop controller first, then csp_server
+        stop_order = get_stop_order('csp_server', config)
+
+        assert 'controller' in stop_order
+        assert 'csp_server' in stop_order
+        # controller must come before csp_server (stop dependents first)
+        assert stop_order.index('controller') < stop_order.index('csp_server')
+
+    def test_get_stop_order_for_leaf_service(self, test_config):
+        """Stop order for leaf service should only include itself."""
+        from sat_agent import get_stop_order, load_config
+
+        config = load_config(test_config)
+        stop_order = get_stop_order('controller', config)
+
+        assert stop_order == ['controller']
+
+    def test_get_start_order_is_reverse_of_stop(self, test_config):
+        """Start order should be reverse of stop order (bottom-up)."""
+        from sat_agent import get_stop_order, get_start_order, load_config
+
+        config = load_config(test_config)
+        stop_order = get_stop_order('csp_server', config)
+        start_order = get_start_order('csp_server', config)
+
+        assert start_order == list(reversed(stop_order))
+
+
+class TestServiceControl:
+    """Tests for starting and stopping services."""
+
+    def test_stop_service_calls_systemctl(self):
+        """Should call systemctl stop with service name."""
+        from sat_agent import stop_service
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            stop_service('controller.service')
+
+        mock_run.assert_called_once_with(
+            ['systemctl', 'stop', 'controller.service'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+    def test_start_service_calls_systemctl(self):
+        """Should call systemctl start with service name."""
+        from sat_agent import start_service
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            start_service('controller.service')
+
+        mock_run.assert_called_once_with(
+            ['systemctl', 'start', 'controller.service'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+
+class TestBinaryOperations:
+    """Tests for binary backup and swap operations."""
+
+    def test_backup_binary_copies_to_prev(self, test_config, tmp_path):
+        """Should copy current binary to .prev in backup dir."""
+        from sat_agent import backup_binary, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+
+        # Create fake binary
+        binary_dir = tmp_path / 'bin'
+        binary_dir.mkdir()
+        binary = binary_dir / 'controller'
+        binary.write_text('binary content')
+
+        # Override binary path in config
+        config['services']['controller']['binary'] = str(binary)
+
+        backup_binary('controller', config)
+
+        backup_file = tmp_path / 'backups' / 'controller.prev'
+        assert backup_file.exists()
+        assert backup_file.read_text() == 'binary content'
+
+    def test_backup_binary_skips_if_no_existing(self, test_config, tmp_path):
+        """Should not error if binary doesn't exist (first deploy)."""
+        from sat_agent import backup_binary, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+        config['services']['controller']['binary'] = str(tmp_path / 'nonexistent')
+
+        # Should not raise
+        backup_binary('controller', config)
+
+    def test_swap_binary_moves_new_to_final(self, tmp_path, test_config):
+        """Should move .new file to final path."""
+        from sat_agent import swap_binary, load_config
+
+        config = load_config(test_config)
+
+        # Create .new file
+        binary = tmp_path / 'controller'
+        new_binary = tmp_path / 'controller.new'
+        new_binary.write_text('new binary')
+
+        config['services']['controller']['binary'] = str(binary)
+
+        swap_binary('controller', config)
+
+        assert binary.exists()
+        assert binary.read_text() == 'new binary'
+        assert not new_binary.exists()
+
+    def test_swap_binary_makes_executable(self, tmp_path, test_config):
+        """Should chmod +x the deployed binary."""
+        from sat_agent import swap_binary, load_config
+        import stat
+
+        config = load_config(test_config)
+
+        binary = tmp_path / 'controller'
+        new_binary = tmp_path / 'controller.new'
+        new_binary.write_text('new binary')
+
+        config['services']['controller']['binary'] = str(binary)
+
+        swap_binary('controller', config)
+
+        mode = binary.stat().st_mode
+        assert mode & stat.S_IXUSR  # Owner execute
+
+    def test_swap_binary_fails_if_new_missing(self, tmp_path, test_config):
+        """Should raise error if .new file doesn't exist."""
+        from sat_agent import swap_binary, load_config
+
+        config = load_config(test_config)
+        config['services']['controller']['binary'] = str(tmp_path / 'controller')
+
+        with pytest.raises(FileNotFoundError):
+            swap_binary('controller', config)
+
+
+class TestDeployCommand:
+    """Tests for the full deploy command."""
+
+    def test_deploy_returns_success_json(self, test_config, tmp_path):
+        """Deploy should return JSON with status ok."""
+        from sat_agent import deploy, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+        config['version_log'] = str(tmp_path / 'versions.json')
+
+        # Setup binary files
+        binary = tmp_path / 'controller'
+        new_binary = tmp_path / 'controller.new'
+        new_binary.write_text('new binary content')
+        config['services']['controller']['binary'] = str(binary)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            result = deploy('controller', config)
+
+        assert result['status'] == 'ok'
+        assert result['service'] == 'controller'
+        assert 'hash' in result
+
+    def test_deploy_stops_services_in_order(self, test_config, tmp_path):
+        """Deploy should stop dependents before service."""
+        from sat_agent import deploy, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+        config['version_log'] = str(tmp_path / 'versions.json')
+
+        binary = tmp_path / 'csp_server'
+        new_binary = tmp_path / 'csp_server.new'
+        new_binary.write_text('new binary')
+        config['services']['csp_server']['binary'] = str(binary)
+
+        stop_calls = []
+
+        def track_stop(svc):
+            stop_calls.append(svc)
+
+        with patch('sat_agent.stop_service', side_effect=track_stop), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            deploy('csp_server', config)
+
+        # controller depends on csp_server, so stop controller first
+        assert stop_calls.index('controller.service') < stop_calls.index('csp_server.service')
+
+    def test_deploy_starts_services_in_reverse_order(self, test_config, tmp_path):
+        """Deploy should start service before dependents."""
+        from sat_agent import deploy, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+        config['version_log'] = str(tmp_path / 'versions.json')
+
+        binary = tmp_path / 'csp_server'
+        new_binary = tmp_path / 'csp_server.new'
+        new_binary.write_text('new binary')
+        config['services']['csp_server']['binary'] = str(binary)
+
+        start_calls = []
+
+        def track_start(svc):
+            start_calls.append(svc)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service', side_effect=track_start), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            deploy('csp_server', config)
+
+        # Start csp_server first, then controller
+        assert start_calls.index('csp_server.service') < start_calls.index('controller.service')
+
+    def test_deploy_fails_if_service_not_running(self, test_config, tmp_path):
+        """Deploy should fail if service doesn't start."""
+        from sat_agent import deploy, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+        config['version_log'] = str(tmp_path / 'versions.json')
+
+        binary = tmp_path / 'controller'
+        new_binary = tmp_path / 'controller.new'
+        new_binary.write_text('new binary')
+        config['services']['controller']['binary'] = str(binary)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='stopped'):
+            result = deploy('controller', config)
+
+        assert result['status'] == 'failed'
+        assert 'not running' in result['reason']
+
+    def test_deploy_logs_to_versions_json(self, test_config, tmp_path):
+        """Deploy should log deployment to versions.json."""
+        from sat_agent import deploy, load_config
+        import json
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+        version_log = tmp_path / 'versions.json'
+        config['version_log'] = str(version_log)
+
+        binary = tmp_path / 'controller'
+        new_binary = tmp_path / 'controller.new'
+        new_binary.write_text('new binary content')
+        config['services']['controller']['binary'] = str(binary)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            deploy('controller', config)
+
+        assert version_log.exists()
+        log_data = json.loads(version_log.read_text())
+        assert len(log_data) == 1
+        assert log_data[0]['service'] == 'controller'
+        assert 'hash' in log_data[0]
+        assert 'timestamp' in log_data[0]
+
+    def test_deploy_unknown_service_fails(self, test_config):
+        """Deploy should fail for unknown service."""
+        from sat_agent import deploy, load_config
+
+        config = load_config(test_config)
+
+        result = deploy('unknown_service', config)
+
+        assert result['status'] == 'failed'
+        assert 'unknown' in result['reason'].lower()
