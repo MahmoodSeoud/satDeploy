@@ -414,6 +414,15 @@ def main():
             print(json.dumps(result))
             if result['status'] == 'failed':
                 sys.exit(1)
+        elif command == 'rollback':
+            if len(sys.argv) < 3:
+                print(json.dumps({'status': 'failed', 'reason': 'rollback requires service name'}))
+                sys.exit(1)
+            service = sys.argv[2]
+            result = rollback(service, config)
+            print(json.dumps(result))
+            if result['status'] == 'failed':
+                sys.exit(1)
         else:
             print(json.dumps({'status': 'failed', 'reason': f'Unknown command: {command}'}))
             sys.exit(1)

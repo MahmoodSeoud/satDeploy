@@ -505,3 +505,207 @@ class TestRollbackCommand:
         assert result['status'] == 'ok'
         assert result['service'] == 'controller'
         assert 'hash' in result
+
+    def test_rollback_copies_prev_to_binary(self, test_config, tmp_path):
+        """Rollback should copy .prev file back to binary path."""
+        from sat_agent import rollback, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+
+        # Setup binary and backup files
+        binary = tmp_path / 'controller'
+        binary.write_text('current binary')
+        backup_dir = tmp_path / 'backups'
+        backup_dir.mkdir()
+        backup = backup_dir / 'controller.prev'
+        backup.write_text('previous binary')
+
+        config['services']['controller']['binary'] = str(binary)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            rollback('controller', config)
+
+        assert binary.read_text() == 'previous binary'
+
+    def test_rollback_makes_executable(self, test_config, tmp_path):
+        """Rollback should chmod +x the restored binary."""
+        from sat_agent import rollback, load_config
+        import stat
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+
+        binary = tmp_path / 'controller'
+        binary.write_text('current')
+        backup_dir = tmp_path / 'backups'
+        backup_dir.mkdir()
+        backup = backup_dir / 'controller.prev'
+        backup.write_text('previous')
+
+        config['services']['controller']['binary'] = str(binary)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            rollback('controller', config)
+
+        mode = binary.stat().st_mode
+        assert mode & stat.S_IXUSR  # Owner execute
+
+    def test_rollback_fails_if_no_backup(self, test_config, tmp_path):
+        """Rollback should fail if no .prev file exists."""
+        from sat_agent import rollback, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+
+        binary = tmp_path / 'controller'
+        binary.write_text('current')
+
+        config['services']['controller']['binary'] = str(binary)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'):
+            result = rollback('controller', config)
+
+        assert result['status'] == 'failed'
+        assert 'no backup' in result['reason'].lower()
+
+    def test_rollback_unknown_service_fails(self, test_config):
+        """Rollback should fail for unknown service."""
+        from sat_agent import rollback, load_config
+
+        config = load_config(test_config)
+
+        result = rollback('unknown_service', config)
+
+        assert result['status'] == 'failed'
+        assert 'unknown' in result['reason'].lower()
+
+    def test_rollback_stops_services_in_order(self, test_config, tmp_path):
+        """Rollback should stop dependents before service."""
+        from sat_agent import rollback, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+
+        binary = tmp_path / 'csp_server'
+        binary.write_text('current')
+        backup_dir = tmp_path / 'backups'
+        backup_dir.mkdir()
+        backup = backup_dir / 'csp_server.prev'
+        backup.write_text('previous')
+
+        config['services']['csp_server']['binary'] = str(binary)
+
+        stop_calls = []
+
+        def track_stop(svc):
+            stop_calls.append(svc)
+
+        with patch('sat_agent.stop_service', side_effect=track_stop), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            rollback('csp_server', config)
+
+        # controller depends on csp_server, so stop controller first
+        assert stop_calls.index('controller.service') < stop_calls.index('csp_server.service')
+
+    def test_rollback_starts_services_in_reverse_order(self, test_config, tmp_path):
+        """Rollback should start service before dependents."""
+        from sat_agent import rollback, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+
+        binary = tmp_path / 'csp_server'
+        binary.write_text('current')
+        backup_dir = tmp_path / 'backups'
+        backup_dir.mkdir()
+        backup = backup_dir / 'csp_server.prev'
+        backup.write_text('previous')
+
+        config['services']['csp_server']['binary'] = str(binary)
+
+        start_calls = []
+
+        def track_start(svc):
+            start_calls.append(svc)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service', side_effect=track_start), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            rollback('csp_server', config)
+
+        # Start csp_server first, then controller
+        assert start_calls.index('csp_server.service') < start_calls.index('controller.service')
+
+    def test_rollback_fails_if_service_not_running_after(self, test_config, tmp_path):
+        """Rollback should fail if service doesn't start."""
+        from sat_agent import rollback, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+
+        binary = tmp_path / 'controller'
+        binary.write_text('current')
+        backup_dir = tmp_path / 'backups'
+        backup_dir.mkdir()
+        backup = backup_dir / 'controller.prev'
+        backup.write_text('previous')
+
+        config['services']['controller']['binary'] = str(binary)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='stopped'):
+            result = rollback('controller', config)
+
+        assert result['status'] == 'failed'
+        assert 'not running' in result['reason']
+
+
+class TestMainCLI:
+    """Tests for the main CLI entry point."""
+
+    def test_main_handles_rollback_command(self, test_config, tmp_path, monkeypatch, capsys):
+        """Main should handle rollback command and print JSON."""
+        from sat_agent import main
+        import sys
+
+        # Setup
+        backup_dir = tmp_path / 'backups'
+        backup_dir.mkdir()
+        binary = tmp_path / 'controller'
+        binary.write_text('current')
+        backup = backup_dir / 'controller.prev'
+        backup.write_text('previous')
+
+        # Create config with correct paths
+        config_content = f"""
+services:
+  controller:
+    binary: {binary}
+    systemd: controller.service
+    depends_on: []
+
+backup_dir: {backup_dir}
+"""
+        config_file = tmp_path / 'config.yaml'
+        config_file.write_text(config_content)
+
+        monkeypatch.setenv('SAT_AGENT_CONFIG', str(config_file))
+        monkeypatch.setattr(sys, 'argv', ['sat_agent', 'rollback', 'controller'])
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            main()
+
+        captured = capsys.readouterr()
+        response = json.loads(captured.out)
+        assert response['status'] == 'ok'
+        assert response['service'] == 'controller'
