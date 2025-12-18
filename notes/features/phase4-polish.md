@@ -15,7 +15,15 @@
 4. Better error messages
 5. Install script
 
-## Notes
-- Logs command streams output, doesn't capture
-- Restart is similar to deploy but without binary swap
-- Timing should use time.time() and format human-readable
+## Completed
+
+All items implemented:
+- [x] Timing output with human-readable format (0.5s, 1m 30s)
+- [x] Logs command streams journalctl via SSH
+- [x] Restart command in both agent and CLI
+- [x] Config error messages include hints about env vars
+- [x] install-agent.sh script
+
+## Test Summary
+- 80 total tests (up from 62)
+- New tests: timing output (3), logs (3), restart CLI (5), restart agent (4), main CLI (2)
