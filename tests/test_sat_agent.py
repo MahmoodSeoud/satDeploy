@@ -475,3 +475,33 @@ class TestDeployCommand:
 
         assert result['status'] == 'failed'
         assert 'unknown' in result['reason'].lower()
+
+
+class TestRollbackCommand:
+    """Tests for the rollback command."""
+
+    def test_rollback_returns_success_json(self, test_config, tmp_path):
+        """Rollback should return JSON with status ok."""
+        from sat_agent import rollback, load_config
+
+        config = load_config(test_config)
+        config['backup_dir'] = str(tmp_path / 'backups')
+
+        # Setup binary and backup files
+        binary = tmp_path / 'controller'
+        binary.write_text('current binary')
+        backup_dir = tmp_path / 'backups'
+        backup_dir.mkdir()
+        backup = backup_dir / 'controller.prev'
+        backup.write_text('previous binary')
+
+        config['services']['controller']['binary'] = str(binary)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            result = rollback('controller', config)
+
+        assert result['status'] == 'ok'
+        assert result['service'] == 'controller'
+        assert 'hash' in result

@@ -236,6 +236,82 @@ def log_deployment(service, file_hash, config):
     version_log.write_text(json.dumps(entries, indent=2))
 
 
+def restore_binary(service, config):
+    """Restore backup binary to original path.
+
+    Args:
+        service: Service name.
+        config: Configuration dictionary.
+
+    Raises:
+        FileNotFoundError: If backup file doesn't exist.
+    """
+    services = config.get('services', {})
+    service_config = services.get(service, {})
+    binary_path = Path(service_config.get('binary', ''))
+    backup_dir = Path(config.get('backup_dir', '/opt/sat-agent/backups'))
+    backup_path = backup_dir / f'{service}.prev'
+
+    if not backup_path.exists():
+        raise FileNotFoundError(f"No backup found: {backup_path}")
+
+    shutil.copy2(backup_path, binary_path)
+    binary_path.chmod(0o755)
+
+
+def rollback(service, config):
+    """Rollback a service to its previous version.
+
+    Args:
+        service: Service name to rollback.
+        config: Configuration dictionary.
+
+    Returns:
+        dict: Result with 'status', 'service', and 'hash' or 'reason'.
+    """
+    services = config.get('services', {})
+
+    if service not in services:
+        return {'status': 'failed', 'reason': f'Unknown service: {service}'}
+
+    service_config = services[service]
+    systemd_name = service_config.get('systemd', f'{service}.service')
+
+    try:
+        # Stop services in order (dependents first)
+        stop_order = get_stop_order(service, config)
+        for svc in stop_order:
+            svc_config = services.get(svc, {})
+            svc_systemd = svc_config.get('systemd', f'{svc}.service')
+            stop_service(svc_systemd)
+
+        # Restore backup binary
+        restore_binary(service, config)
+
+        # Compute hash of restored binary
+        binary_path = Path(service_config.get('binary', ''))
+        file_hash = compute_hash(binary_path)
+
+        # Start services in order (service first, then dependents)
+        start_order = get_start_order(service, config)
+        for svc in start_order:
+            svc_config = services.get(svc, {})
+            svc_systemd = svc_config.get('systemd', f'{svc}.service')
+            start_service(svc_systemd)
+
+        # Verify service is running
+        if check_service_status(systemd_name) != 'running':
+            return {
+                'status': 'failed',
+                'reason': f'Service {service} not running after rollback'
+            }
+
+        return {'status': 'ok', 'service': service, 'hash': file_hash}
+
+    except Exception as e:
+        return {'status': 'failed', 'reason': str(e)}
+
+
 def deploy(service, config):
     """Deploy a service.
 
