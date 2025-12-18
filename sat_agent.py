@@ -312,6 +312,52 @@ def rollback(service, config):
         return {'status': 'failed', 'reason': str(e)}
 
 
+def restart(service, config):
+    """Restart a service and its dependents.
+
+    Args:
+        service: Service name to restart.
+        config: Configuration dictionary.
+
+    Returns:
+        dict: Result with 'status', 'service', or 'reason'.
+    """
+    services = config.get('services', {})
+
+    if service not in services:
+        return {'status': 'failed', 'reason': f'Unknown service: {service}'}
+
+    service_config = services[service]
+    systemd_name = service_config.get('systemd', f'{service}.service')
+
+    try:
+        # Stop services in order (dependents first)
+        stop_order = get_stop_order(service, config)
+        for svc in stop_order:
+            svc_config = services.get(svc, {})
+            svc_systemd = svc_config.get('systemd', f'{svc}.service')
+            stop_service(svc_systemd)
+
+        # Start services in order (service first, then dependents)
+        start_order = get_start_order(service, config)
+        for svc in start_order:
+            svc_config = services.get(svc, {})
+            svc_systemd = svc_config.get('systemd', f'{svc}.service')
+            start_service(svc_systemd)
+
+        # Verify service is running
+        if check_service_status(systemd_name) != 'running':
+            return {
+                'status': 'failed',
+                'reason': f'Service {service} not running after restart'
+            }
+
+        return {'status': 'ok', 'service': service}
+
+    except Exception as e:
+        return {'status': 'failed', 'reason': str(e)}
+
+
 def deploy(service, config):
     """Deploy a service.
 
@@ -420,6 +466,15 @@ def main():
                 sys.exit(1)
             service = sys.argv[2]
             result = rollback(service, config)
+            print(json.dumps(result))
+            if result['status'] == 'failed':
+                sys.exit(1)
+        elif command == 'restart':
+            if len(sys.argv) < 3:
+                print(json.dumps({'status': 'failed', 'reason': 'restart requires service name'}))
+                sys.exit(1)
+            service = sys.argv[2]
+            result = restart(service, config)
             print(json.dumps(result))
             if result['status'] == 'failed':
                 sys.exit(1)

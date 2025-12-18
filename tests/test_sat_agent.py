@@ -668,6 +668,75 @@ class TestRollbackCommand:
         assert 'not running' in result['reason']
 
 
+class TestRestartCommand:
+    """Tests for the restart command."""
+
+    def test_restart_returns_success_json(self, test_config):
+        """Restart should return JSON with status ok."""
+        from sat_agent import restart, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            result = restart('controller', config)
+
+        assert result['status'] == 'ok'
+        assert result['service'] == 'controller'
+
+    def test_restart_stops_then_starts_services(self, test_config):
+        """Restart should stop and start services in correct order."""
+        from sat_agent import restart, load_config
+
+        config = load_config(test_config)
+
+        call_order = []
+
+        def track_stop(svc):
+            call_order.append(('stop', svc))
+
+        def track_start(svc):
+            call_order.append(('start', svc))
+
+        with patch('sat_agent.stop_service', side_effect=track_stop), \
+             patch('sat_agent.start_service', side_effect=track_start), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            restart('csp_server', config)
+
+        # Should stop dependents (controller) first, then csp_server
+        stop_idx = [i for i, (op, _) in enumerate(call_order) if op == 'stop']
+        start_idx = [i for i, (op, _) in enumerate(call_order) if op == 'start']
+
+        # All stops should come before all starts
+        assert max(stop_idx) < min(start_idx)
+
+    def test_restart_fails_for_unknown_service(self, test_config):
+        """Restart should fail for unknown service."""
+        from sat_agent import restart, load_config
+
+        config = load_config(test_config)
+
+        result = restart('unknown_service', config)
+
+        assert result['status'] == 'failed'
+        assert 'unknown' in result['reason'].lower()
+
+    def test_restart_fails_if_service_not_running_after(self, test_config):
+        """Restart should fail if service doesn't start."""
+        from sat_agent import restart, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='stopped'):
+            result = restart('controller', config)
+
+        assert result['status'] == 'failed'
+        assert 'not running' in result['reason']
+
+
 class TestMainCLI:
     """Tests for the main CLI entry point."""
 
@@ -699,6 +768,24 @@ backup_dir: {backup_dir}
 
         monkeypatch.setenv('SAT_AGENT_CONFIG', str(config_file))
         monkeypatch.setattr(sys, 'argv', ['sat_agent', 'rollback', 'controller'])
+
+        with patch('sat_agent.stop_service'), \
+             patch('sat_agent.start_service'), \
+             patch('sat_agent.check_service_status', return_value='running'):
+            main()
+
+        captured = capsys.readouterr()
+        response = json.loads(captured.out)
+        assert response['status'] == 'ok'
+        assert response['service'] == 'controller'
+
+    def test_main_handles_restart_command(self, test_config, monkeypatch, capsys):
+        """Main should handle restart command and print JSON."""
+        from sat_agent import main
+        import sys
+
+        monkeypatch.setenv('SAT_AGENT_CONFIG', str(test_config))
+        monkeypatch.setattr(sys, 'argv', ['sat_agent', 'restart', 'controller'])
 
         with patch('sat_agent.stop_service'), \
              patch('sat_agent.start_service'), \
