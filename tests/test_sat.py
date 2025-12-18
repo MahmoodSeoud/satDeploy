@@ -458,6 +458,49 @@ class TestRollbackCommand:
         assert result == 1
 
 
+class TestTimingOutput:
+    """Tests for timing output functionality."""
+
+    def test_deploy_prints_timing(self, test_config, tmp_path, capsys):
+        """Deploy should print timing in output."""
+        from sat import cmd_deploy, load_config
+
+        config = load_config(test_config)
+
+        binary = tmp_path / 'controller'
+        binary.write_text('binary')
+
+        with patch('sat.rsync_upload', return_value=(True, None)), \
+             patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = (
+                json.dumps({'status': 'ok', 'service': 'controller', 'hash': 'abc123'}),
+                '',
+                0
+            )
+            cmd_deploy(config, 'controller', str(binary))
+
+        captured = capsys.readouterr()
+        # Should contain timing info like "in 0.5s" or "in 1s"
+        assert ' in ' in captured.out
+        assert 's)' in captured.out
+
+    def test_format_duration_seconds(self):
+        """Should format seconds correctly."""
+        from sat import format_duration
+
+        assert format_duration(0.5) == '0.5s'
+        assert format_duration(30.0) == '30.0s'
+        assert format_duration(59.9) == '59.9s'
+
+    def test_format_duration_minutes(self):
+        """Should format minutes and seconds correctly."""
+        from sat import format_duration
+
+        assert format_duration(60) == '1m 0s'
+        assert format_duration(90) == '1m 30s'
+        assert format_duration(125) == '2m 5s'
+
+
 class TestMainCLI:
     """Tests for the main CLI entry point."""
 

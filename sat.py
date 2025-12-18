@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -146,6 +147,22 @@ def cmd_status(config):
     return 0
 
 
+def format_duration(seconds):
+    """Format duration in human-readable format.
+
+    Args:
+        seconds: Duration in seconds.
+
+    Returns:
+        str: Formatted duration like "0.5s" or "1m 30s".
+    """
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes}m {secs}s"
+
+
 def cmd_deploy(config, service, binary_path):
     """Execute the deploy command.
 
@@ -157,6 +174,8 @@ def cmd_deploy(config, service, binary_path):
     Returns:
         int: Exit code (0 for success, 1 for failure).
     """
+    start_time = time.time()
+
     # Validate service exists
     services = config.get('services', {})
     if service not in services:
@@ -196,8 +215,9 @@ def cmd_deploy(config, service, binary_path):
         print(f"{CROSS} Deploy failed: {response.get('reason', 'Unknown error')}")
         return 1
 
+    elapsed = time.time() - start_time
     file_hash = response.get('hash', 'unknown')
-    print(f"{CHECK} Deployed {service} ({file_hash})")
+    print(f"{CHECK} Deployed {service} ({file_hash} in {format_duration(elapsed)})")
 
     return 0
 
