@@ -57,6 +57,74 @@ def check_service_status(service_name):
     return 'running' if result.returncode == 0 else 'stopped'
 
 
+def get_dependents(service, config):
+    """Find all services that depend on the given service (transitively).
+
+    Args:
+        service: Name of the service to find dependents for.
+        config: Configuration dictionary with 'services' key.
+
+    Returns:
+        list: Services that depend on this one, ordered for stopping
+              (direct dependents first, then their dependents).
+    """
+    services = config.get('services', {})
+    dependents = []
+    visited = set()
+
+    def find_direct_dependents(svc):
+        """Find services that directly depend on svc."""
+        direct = []
+        for name, svc_config in services.items():
+            deps = svc_config.get('depends_on', [])
+            if svc in deps and name not in visited:
+                direct.append(name)
+        return direct
+
+    def collect_dependents(svc):
+        """Recursively collect all dependents."""
+        direct = find_direct_dependents(svc)
+        for dep in direct:
+            if dep not in visited:
+                visited.add(dep)
+                dependents.append(dep)
+                collect_dependents(dep)
+
+    collect_dependents(service)
+    return dependents
+
+
+def get_stop_order(service, config):
+    """Get order to stop services for deployment (top-down).
+
+    Stops dependents first, then the service itself.
+
+    Args:
+        service: Name of the service being deployed.
+        config: Configuration dictionary.
+
+    Returns:
+        list: Services to stop, in order.
+    """
+    dependents = get_dependents(service, config)
+    return dependents + [service]
+
+
+def get_start_order(service, config):
+    """Get order to start services after deployment (bottom-up).
+
+    Starts the service first, then its dependents.
+
+    Args:
+        service: Name of the service being deployed.
+        config: Configuration dictionary.
+
+    Returns:
+        list: Services to start, in order.
+    """
+    return list(reversed(get_stop_order(service, config)))
+
+
 def get_status(config):
     """Get status of all configured services.
 

@@ -1,4 +1,4 @@
-"""Tests for sat-agent status command."""
+"""Tests for sat-agent."""
 
 import json
 import subprocess
@@ -152,3 +152,70 @@ class TestLoadConfig:
         missing = tmp_path / "missing.yaml"
         with pytest.raises(FileNotFoundError):
             load_config(missing)
+
+
+class TestDependencyResolution:
+    """Tests for dependency graph resolution."""
+
+    def test_get_dependents_finds_direct_dependents(self, test_config):
+        """Should find services that directly depend on given service."""
+        from sat_agent import get_dependents, load_config
+
+        config = load_config(test_config)
+        # controller depends on csp_server
+        dependents = get_dependents('csp_server', config)
+
+        assert 'controller' in dependents
+
+    def test_get_dependents_returns_empty_for_leaf(self, test_config):
+        """Should return empty list for service with no dependents."""
+        from sat_agent import get_dependents, load_config
+
+        config = load_config(test_config)
+        # Nothing depends on controller
+        dependents = get_dependents('controller', config)
+
+        assert dependents == []
+
+    def test_get_dependents_finds_transitive_dependents(self, test_config):
+        """Should find all transitive dependents."""
+        from sat_agent import get_dependents, load_config
+
+        config = load_config(test_config)
+        # param_handler -> csp_server -> controller
+        dependents = get_dependents('param_handler', config)
+
+        assert 'csp_server' in dependents
+        assert 'controller' in dependents
+
+    def test_get_stop_order_includes_service_and_dependents(self, test_config):
+        """Stop order should include service and all dependents, top-down."""
+        from sat_agent import get_stop_order, load_config
+
+        config = load_config(test_config)
+        # Deploying csp_server: must stop controller first, then csp_server
+        stop_order = get_stop_order('csp_server', config)
+
+        assert 'controller' in stop_order
+        assert 'csp_server' in stop_order
+        # controller must come before csp_server (stop dependents first)
+        assert stop_order.index('controller') < stop_order.index('csp_server')
+
+    def test_get_stop_order_for_leaf_service(self, test_config):
+        """Stop order for leaf service should only include itself."""
+        from sat_agent import get_stop_order, load_config
+
+        config = load_config(test_config)
+        stop_order = get_stop_order('controller', config)
+
+        assert stop_order == ['controller']
+
+    def test_get_start_order_is_reverse_of_stop(self, test_config):
+        """Start order should be reverse of stop order (bottom-up)."""
+        from sat_agent import get_stop_order, get_start_order, load_config
+
+        config = load_config(test_config)
+        stop_order = get_stop_order('csp_server', config)
+        start_order = get_start_order('csp_server', config)
+
+        assert start_order == list(reversed(stop_order))
