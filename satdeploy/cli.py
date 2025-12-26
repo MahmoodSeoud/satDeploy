@@ -44,7 +44,8 @@ def init(config_dir: Path | None):
             click.echo("Aborted.")
             return
 
-    click.echo("Setting up satdeploy configuration...")
+    click.echo(click.style("Setting up satdeploy configuration...", bold=True))
+    click.echo("")
     host = click.prompt("Target host (IP or hostname)")
     user = click.prompt("Target user", default="root")
 
@@ -59,7 +60,8 @@ def init(config_dir: Path | None):
     }
 
     config.save(data)
-    click.echo(f"Config saved to {config.config_path}")
+    click.echo("")
+    click.echo(success(f"Config saved to {config.config_path}"))
 
 
 @main.command()
@@ -518,6 +520,8 @@ def logs(app: str, lines: int, config_dir: Path | None):
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
             service_manager = ServiceManager(ssh)
+            click.echo(click.style(f"Logs for {app} ({service}):", bold=True))
+            click.echo("")
             log_output = service_manager.get_logs(service, lines=lines)
             click.echo(log_output)
 
