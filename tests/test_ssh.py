@@ -193,3 +193,68 @@ class TestSSHFileOperations:
             assert "cp" in cmd
             assert "/src/file" in cmd
             assert "/dst/file" in cmd
+
+
+class TestSSHConnectionErrors:
+    """Test SSH connection error handling."""
+
+    def test_connection_refused_raises_ssh_error(self):
+        """Connection refused should raise SSHError with helpful message."""
+        import socket
+
+        with patch("satdeploy.ssh.paramiko.SSHClient") as mock_ssh:
+            mock_ssh.return_value.connect.side_effect = socket.error(
+                "[Errno 61] Connection refused"
+            )
+
+            client = SSHClient(host="192.168.1.50", user="root")
+            with pytest.raises(SSHError) as exc_info:
+                client.connect()
+
+            assert "192.168.1.50" in str(exc_info.value)
+            assert "connection" in str(exc_info.value).lower()
+
+    def test_authentication_failed_raises_ssh_error(self):
+        """Authentication failure should raise SSHError with helpful message."""
+        import paramiko
+
+        with patch("satdeploy.ssh.paramiko.SSHClient") as mock_ssh:
+            mock_ssh.return_value.connect.side_effect = paramiko.AuthenticationException(
+                "Authentication failed"
+            )
+
+            client = SSHClient(host="192.168.1.50", user="root")
+            with pytest.raises(SSHError) as exc_info:
+                client.connect()
+
+            assert "authentication" in str(exc_info.value).lower()
+
+    def test_host_unreachable_raises_ssh_error(self):
+        """Unreachable host should raise SSHError with helpful message."""
+        import socket
+
+        with patch("satdeploy.ssh.paramiko.SSHClient") as mock_ssh:
+            mock_ssh.return_value.connect.side_effect = socket.timeout(
+                "Connection timed out"
+            )
+
+            client = SSHClient(host="192.168.1.50", user="root")
+            with pytest.raises(SSHError) as exc_info:
+                client.connect()
+
+            assert "192.168.1.50" in str(exc_info.value) or "timeout" in str(exc_info.value).lower()
+
+    def test_host_key_mismatch_raises_ssh_error(self):
+        """Host key verification failure should raise SSHError."""
+        import paramiko
+
+        with patch("satdeploy.ssh.paramiko.SSHClient") as mock_ssh:
+            mock_ssh.return_value.connect.side_effect = paramiko.SSHException(
+                "Host key verification failed"
+            )
+
+            client = SSHClient(host="192.168.1.50", user="root")
+            with pytest.raises(SSHError) as exc_info:
+                client.connect()
+
+            assert "192.168.1.50" in str(exc_info.value) or "ssh" in str(exc_info.value).lower()

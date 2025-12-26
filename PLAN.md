@@ -263,9 +263,9 @@ $ satdeploy rollback controller
 - [x] Dependency resolution (stop/start order)
 
 ### Week 3
-- [ ] `satdeploy logs <app>` — Tail journalctl
-- [ ] History database (SQLite)
-- [ ] Error handling, edge cases
+- [x] `satdeploy logs <app>` — Tail journalctl
+- [x] History database (SQLite)
+- [x] Error handling, edge cases
 
 ### Week 4
 - [ ] Polish CLI output
