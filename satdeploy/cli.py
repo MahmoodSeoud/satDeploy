@@ -389,11 +389,17 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             else:
                 services_to_manage = []
 
+            # Calculate total steps: restore + stop services + start services
+            num_services = len(services_to_manage)
+            total_steps = 1 + num_services * 2  # restore, stop each, start each
+            current_step = 0
+
             click.echo(f"Rolling back {app}...")
 
             # Stop services in order
             for svc_app, svc_name in services_to_manage:
-                click.echo(f"  Stopping {svc_app} ({svc_name})...")
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
                 service_manager.stop(svc_name)
 
             # Get backup list and find the right one
@@ -413,19 +419,20 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             version_str = backup["version"]
 
             # Restore the backup
+            current_step += 1
+            click.echo(step(current_step, total_steps, f"Restoring {version_str}"))
             ssh.run(f"cp '{backup_path}' '{remote_path}'")
             ssh.run(f"chmod +x '{remote_path}'")
 
-            click.echo(f"  Restored {version_str}")
-
             # Start services in reverse order
             for svc_app, svc_name in reversed(services_to_manage):
-                click.echo(f"  Starting {svc_app} ({svc_name})...")
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Starting {svc_app} ({svc_name})"))
                 service_manager.start(svc_name)
                 if service_manager.is_healthy(svc_name):
-                    click.echo(f"  Health check passed for {svc_app}")
+                    click.echo(success(f"Health check passed for {svc_app}"))
                 else:
-                    click.echo(f"  Warning: Health check failed for {svc_app}")
+                    click.echo(warning(f"Health check failed for {svc_app}"))
 
             # Log successful rollback
             history.record(DeploymentRecord(
@@ -437,7 +444,7 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                 success=True,
             ))
 
-            click.echo(f"Successfully rolled back {app} to {version_str}")
+            click.echo(success(f"Rolled back {app} to {version_str}"))
 
     except SSHError as e:
         # Log failed rollback
