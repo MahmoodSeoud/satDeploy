@@ -8,8 +8,16 @@ import click
 from satdeploy.config import DEFAULT_CONFIG_DIR, Config
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
+from satdeploy.history import DeploymentRecord, History
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
+
+
+def get_history(config_dir: Path) -> History:
+    """Get or create the history database."""
+    history = History(config_dir / "history.db")
+    history.init_db()
+    return history
 
 
 @click.group()
@@ -94,50 +102,53 @@ def push(app: str, local: str | None, config_dir: Path | None):
         raise click.ClickException(f"Local file not found: {local_path}")
 
     target = config.target
+    history = get_history(config_dir)
+    binary_hash = None
+
     click.echo(f"Connecting to {target['host']}...")
 
-    with SSHClient(host=target["host"], user=target["user"]) as ssh:
-        service_manager = ServiceManager(ssh)
-        deployer = Deployer(
-            ssh=ssh,
-            backup_dir=config.backup_dir,
-            max_backups=config.max_backups,
-        )
+    try:
+        with SSHClient(host=target["host"], user=target["user"]) as ssh:
+            service_manager = ServiceManager(ssh)
+            deployer = Deployer(
+                ssh=ssh,
+                backup_dir=config.backup_dir,
+                max_backups=config.max_backups,
+            )
 
-        # Resolve dependencies
-        resolver = DependencyResolver(config.apps)
+            # Resolve dependencies
+            resolver = DependencyResolver(config.apps)
 
-        # Check for cycles
-        if resolver.has_cycle():
-            raise click.ClickException("Cyclic dependency detected in config")
+            # Check for cycles
+            if resolver.has_cycle():
+                raise click.ClickException("Cyclic dependency detected in config")
 
-        # For libraries with restart list, use that
-        restart_apps = resolver.get_restart_apps(app)
-        if restart_apps:
-            # Library with restart list
-            services_to_manage = []
-            for restart_app in restart_apps:
-                restart_config = config.get_app(restart_app)
-                if restart_config and restart_config.get("service"):
-                    services_to_manage.append(
-                        (restart_app, restart_config.get("service"))
-                    )
-        elif service:
-            # Service with dependencies
-            stop_order = resolver.get_stop_order(app)
-            services_to_manage = []
-            for dep_app in stop_order:
-                dep_config = config.get_app(dep_app)
-                if dep_config and dep_config.get("service"):
-                    services_to_manage.append(
-                        (dep_app, dep_config.get("service"))
-                    )
-        else:
-            services_to_manage = []
+            # For libraries with restart list, use that
+            restart_apps = resolver.get_restart_apps(app)
+            if restart_apps:
+                # Library with restart list
+                services_to_manage = []
+                for restart_app in restart_apps:
+                    restart_config = config.get_app(restart_app)
+                    if restart_config and restart_config.get("service"):
+                        services_to_manage.append(
+                            (restart_app, restart_config.get("service"))
+                        )
+            elif service:
+                # Service with dependencies
+                stop_order = resolver.get_stop_order(app)
+                services_to_manage = []
+                for dep_app in stop_order:
+                    dep_config = config.get_app(dep_app)
+                    if dep_config and dep_config.get("service"):
+                        services_to_manage.append(
+                            (dep_app, dep_config.get("service"))
+                        )
+            else:
+                services_to_manage = []
 
-        click.echo(f"Deploying {app}...")
+            click.echo(f"Deploying {app}...")
 
-        try:
             # Stop services in order
             for svc_app, svc_name in services_to_manage:
                 click.echo(f"  Stopping {svc_app} ({svc_name})...")
@@ -159,10 +170,29 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 else:
                     click.echo(f"  Warning: Health check failed for {svc_app}")
 
+            # Log successful deployment
+            history.record(DeploymentRecord(
+                app=app,
+                binary_hash=binary_hash,
+                remote_path=remote_path,
+                backup_path=backup_path,
+                action="push",
+                success=True,
+            ))
+
             click.echo(f"Successfully deployed {app} ({binary_hash})")
 
-        except SSHError as e:
-            raise click.ClickException(str(e))
+    except SSHError as e:
+        # Log failed deployment
+        history.record(DeploymentRecord(
+            app=app,
+            binary_hash=binary_hash or "",
+            remote_path=remote_path,
+            action="push",
+            success=False,
+            error_message=str(e),
+        ))
+        raise click.ClickException(str(e))
 
 
 @main.command()

@@ -486,3 +486,154 @@ class TestPushWithDependencies:
         assert result.exit_code != 0
         assert "permission denied" in result.output.lower()
         assert "Traceback" not in result.output
+
+
+class TestPushHistoryLogging:
+    """Tests for deployment history logging on push."""
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_logs_successful_deployment(self, mock_ssh_class, tmp_path):
+        """Successful push should be recorded in history database."""
+        from satdeploy.history import History
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": str(binary),
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+
+        # Check history was recorded
+        history = History(config_dir / "history.db")
+        records = history.get_history("controller")
+        assert len(records) == 1
+        assert records[0].app == "controller"
+        assert records[0].action == "push"
+        assert records[0].success is True
+        assert records[0].remote_path == "/opt/disco/bin/controller"
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_logs_binary_hash(self, mock_ssh_class, tmp_path):
+        """Push should record the binary hash in history."""
+        from satdeploy.history import History
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": str(binary),
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+
+        history = History(config_dir / "history.db")
+        records = history.get_history("controller")
+        assert records[0].binary_hash is not None
+        assert len(records[0].binary_hash) == 8  # First 8 chars of SHA256
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_logs_failed_deployment(self, mock_ssh_class, tmp_path):
+        """Failed push should be recorded in history with error message."""
+        from satdeploy.history import History
+        from satdeploy.ssh import SSHError
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": str(binary),
+                            "remote": "/opt/disco/bin/controller",
+                            "service": None,
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        mock_ssh.run.side_effect = SSHError("Connection refused")
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code != 0
+
+        history = History(config_dir / "history.db")
+        records = history.get_history("controller")
+        assert len(records) == 1
+        assert records[0].success is False
+        assert "Connection refused" in records[0].error_message
