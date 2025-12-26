@@ -1,5 +1,6 @@
 """SSH connection wrapper for satdeploy."""
 
+import socket
 from dataclasses import dataclass
 from typing import Optional
 
@@ -7,7 +8,7 @@ import paramiko
 
 
 class SSHError(Exception):
-    """Exception raised for SSH command failures."""
+    """Exception raised for SSH connection and command failures."""
 
     pass
 
@@ -32,15 +33,28 @@ class SSHClient:
         self._sftp: Optional[paramiko.SFTPClient] = None
 
     def connect(self) -> None:
-        """Establish SSH connection."""
+        """Establish SSH connection.
+
+        Raises:
+            SSHError: If connection fails for any reason.
+        """
         self._client = paramiko.SSHClient()
         self._client.load_system_host_keys()
         self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self._client.connect(
-            hostname=self.host,
-            port=self.port,
-            username=self.user,
-        )
+        try:
+            self._client.connect(
+                hostname=self.host,
+                port=self.port,
+                username=self.user,
+            )
+        except paramiko.AuthenticationException as e:
+            raise SSHError(f"Authentication failed for {self.user}@{self.host}: {e}")
+        except paramiko.SSHException as e:
+            raise SSHError(f"SSH error connecting to {self.host}: {e}")
+        except socket.timeout as e:
+            raise SSHError(f"Connection timed out to {self.host}: {e}")
+        except socket.error as e:
+            raise SSHError(f"Connection failed to {self.host}: {e}")
 
     def disconnect(self) -> None:
         """Close SSH connection."""
