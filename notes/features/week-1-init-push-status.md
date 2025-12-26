@@ -18,7 +18,7 @@
 - Deployer module contains push logic
 
 ## Progress
-- [ ] Project setup
-- [ ] init command
-- [ ] push command
-- [ ] status command
+- [x] Project setup (pyproject.toml, package skeleton)
+- [x] init command (interactive config creation)
+- [x] push command (backup, copy, restart, health check)
+- [x] status command (show service states)
