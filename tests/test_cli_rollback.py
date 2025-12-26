@@ -103,7 +103,8 @@ class TestRollbackCommand:
 
         assert result.exit_code == 0
         assert "rolled back" in result.output.lower() or "restored" in result.output.lower()
-        assert "20240115-143022" in result.output
+        # Should show formatted timestamp
+        assert "2024-01-15 14:30:22" in result.output
 
     @patch("satdeploy.cli.SSHClient")
     def test_rollback_accepts_version_argument(self, mock_ssh_class, tmp_path):
@@ -142,7 +143,8 @@ class TestRollbackCommand:
         )
 
         assert result.exit_code == 0
-        assert "20240114-091500" in result.output
+        # Should show formatted timestamp for the specific version
+        assert "2024-01-14 09:15:00" in result.output
 
     @patch("satdeploy.cli.SSHClient")
     def test_rollback_fails_when_no_backups(self, mock_ssh_class, tmp_path):
@@ -406,6 +408,53 @@ class TestRollbackHistoryLogging:
         assert "20240115-143022" in records[0].backup_path
 
     @patch("satdeploy.cli.SSHClient")
+    def test_rollback_stores_hash_not_version_string(self, mock_ssh_class, tmp_path):
+        """Rollback should store just the hash in binary_hash, not the full version string."""
+        from satdeploy.history import History
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        # Use new format with hash in filename
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022-abc12345.bak\n",
+            exit_code=0,
+        )
+
+        result = runner.invoke(
+            main,
+            ["rollback", "controller", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+
+        history = History(config_dir / "history.db")
+        records = history.get_history("controller")
+        # binary_hash should be just the hash, not the full version string
+        assert records[0].binary_hash == "abc12345"
+        assert records[0].binary_hash != "20240115-143022-abc12345"
+
+    @patch("satdeploy.cli.SSHClient")
     def test_rollback_logs_failed_operation(self, mock_ssh_class, tmp_path):
         """Failed rollback should be recorded in history with error message."""
         from satdeploy.history import History
@@ -537,3 +586,46 @@ class TestRollbackPolishedOutput:
 
         assert result.exit_code == 0
         assert SYMBOLS["check"] in result.output
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_rollback_shows_formatted_hash_and_timestamp(self, mock_ssh_class, tmp_path):
+        """Rollback should show formatted hash and timestamp, not raw version string."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022-abc12345.bak\n",
+            exit_code=0,
+        )
+
+        result = runner.invoke(
+            main,
+            ["rollback", "controller", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+        # Should show formatted hash and timestamp
+        assert "abc12345" in result.output
+        assert "2024-01-15 14:30:22" in result.output
+        # Should NOT show the raw version string format
+        assert "20240115-143022-abc12345" not in result.output

@@ -495,11 +495,12 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                 backup = backups[0]
 
             backup_path = backup["path"]
-            version_str = backup["version"]
+            backup_hash = backup.get("hash") or "-"
+            backup_timestamp = backup.get("timestamp") or "-"
 
             # Restore the backup
             current_step += 1
-            click.echo(step(current_step, total_steps, f"Restoring {version_str}"))
+            click.echo(step(current_step, total_steps, f"Restoring {backup_hash} ({backup_timestamp})"))
             ssh.run(f"cp '{backup_path}' '{remote_path}'")
             ssh.run(f"chmod +x '{remote_path}'")
 
@@ -516,14 +517,14 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             # Log successful rollback
             history.record(DeploymentRecord(
                 app=app,
-                binary_hash=version_str,
+                binary_hash=backup_hash,
                 remote_path=remote_path,
                 backup_path=backup_path,
                 action="rollback",
                 success=True,
             ))
 
-            click.echo(success(f"Rolled back {app} to {version_str}"))
+            click.echo(success(f"Rolled back {app} to {backup_hash} ({backup_timestamp})"))
 
     except SSHError as e:
         # Log failed rollback
