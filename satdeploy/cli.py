@@ -227,6 +227,7 @@ def status(config_dir: Path | None):
 
     target = config.target
     apps = config.apps
+    history = get_history(config_dir)
 
     click.echo(f"Target: {target['host']} ({target['user']})")
     click.echo("")
@@ -243,6 +244,13 @@ def status(config_dir: Path | None):
                 service = app_config.get("service")
                 remote_path = app_config.get("remote")
 
+                # Get version from history
+                last_deploy = history.get_last_deployment(app_name)
+                if last_deploy and last_deploy.success:
+                    version_str = click.style(last_deploy.binary_hash[:8], fg="cyan")
+                else:
+                    version_str = click.style("-", fg="bright_black")
+
                 if service:
                     svc_status = service_manager.get_status(service)
                     if svc_status == ServiceStatus.RUNNING:
@@ -257,7 +265,6 @@ def status(config_dir: Path | None):
                     else:
                         symbol = click.style(SYMBOLS["bullet"], fg="white")
                         status_str = "unknown"
-                    click.echo(f"  {symbol} {app_name}: {status_str} ({service})")
                 else:
                     deployed = ssh.file_exists(remote_path)
                     if deployed:
@@ -266,7 +273,9 @@ def status(config_dir: Path | None):
                     else:
                         symbol = click.style(SYMBOLS["bullet"], fg="yellow")
                         status_str = click.style("not deployed", fg="yellow")
-                    click.echo(f"  {symbol} {app_name}: {status_str} (library)")
+
+                # Use fixed width columns for clean alignment
+                click.echo(f"  {symbol} {app_name:<18} {status_str:<16} {version_str}")
 
     except SSHError as e:
         raise click.ClickException(str(e))
@@ -300,6 +309,11 @@ def list_backups(app: str, config_dir: Path | None):
         )
 
     target = config.target
+    history = get_history(config_dir)
+
+    # Get currently deployed version from history
+    last_deploy = history.get_last_deployment(app)
+    current_backup_path = last_deploy.backup_path if last_deploy and last_deploy.success else None
 
     with SSHClient(host=target["host"], user=target["user"]) as ssh:
         deployer = Deployer(
@@ -318,10 +332,20 @@ def list_backups(app: str, config_dir: Path | None):
             click.echo(click.style(f"Backups for {app}:", bold=True))
             click.echo("")
             for backup in backups:
-                bullet = click.style(SYMBOLS["bullet"], fg="cyan")
-                version = click.style(backup["version"], fg="white")
+                # Check if this is the currently deployed version
+                is_current = current_backup_path and backup["version"] in current_backup_path
+
+                if is_current:
+                    bullet = click.style(SYMBOLS["arrow"], fg="green")
+                    version = click.style(backup["version"], fg="green")
+                    current_marker = click.style("  current", fg="green", bold=True)
+                else:
+                    bullet = click.style(SYMBOLS["bullet"], fg="blue")
+                    version = click.style(backup["version"], fg="blue")
+                    current_marker = ""
+
                 timestamp = click.style(backup["timestamp"], fg="bright_black")
-                click.echo(f"  {bullet} {version}  {timestamp}")
+                click.echo(f"  {bullet} {version}  {timestamp}{current_marker}")
 
         except SSHError as e:
             raise click.ClickException(str(e))
