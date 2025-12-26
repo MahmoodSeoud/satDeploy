@@ -252,29 +252,24 @@ def status(config_dir: Path | None):
                 service = app_config.get("service")
                 remote_path = app_config.get("remote")
 
-                # Get hash and timestamp from history
-                last_deploy = history.get_last_deployment(app_name)
-                if last_deploy and last_deploy.success and last_deploy.backup_path:
-                    # Extract hash and timestamp from backup path (e.g., "20240115-143022-abc123" from ".../20240115-143022-abc123.bak")
-                    backup_filename = os.path.basename(last_deploy.backup_path).replace(".bak", "")
-                    version_parts = backup_filename.split("-")
-                    hash_display = version_parts[2] if len(version_parts) >= 3 else "-"
-                    # Parse timestamp from YYYYMMDD-HHMMSS format
-                    if len(version_parts) >= 2:
-                        from datetime import datetime
-                        try:
-                            dt = datetime.strptime(f"{version_parts[0]}-{version_parts[1]}", "%Y%m%d-%H%M%S")
-                            timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
-                        except ValueError:
-                            timestamp_display = "-"
-                    else:
-                        timestamp_display = "-"
-                else:
-                    hash_display = "-"
-                    timestamp_display = "-"
-
                 # First check if file exists
                 deployed = ssh.file_exists(remote_path)
+
+                # Get hash and timestamp from history (only if actually deployed)
+                hash_display = "-"
+                timestamp_display = "-"
+                if deployed:
+                    last_deploy = history.get_last_deployment(app_name)
+                    if last_deploy and last_deploy.success:
+                        # Use binary_hash and timestamp directly from history record
+                        hash_display = last_deploy.binary_hash or "-"
+                        if last_deploy.timestamp:
+                            from datetime import datetime
+                            try:
+                                dt = datetime.fromisoformat(last_deploy.timestamp)
+                                timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
+                            except ValueError:
+                                timestamp_display = "-"
 
                 if not deployed:
                     symbol = click.style(SYMBOLS["bullet"], fg="yellow")
