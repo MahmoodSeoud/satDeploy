@@ -227,3 +227,75 @@ def list_backups(app: str, config_dir: Path | None):
         click.echo(f"{'VERSION':<25} {'TIMESTAMP':<20}")
         for backup in backups:
             click.echo(f"{backup['version']:<25} {backup['timestamp']:<20}")
+
+
+@main.command()
+@click.argument("app")
+@click.argument("version", required=False, default=None)
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def rollback(app: str, version: str | None, config_dir: Path | None):
+    """Rollback to a previous version.
+
+    APP is the name of the application to rollback.
+    VERSION is the optional backup version to restore (defaults to latest).
+    """
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise click.ClickException(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    app_config = config.get_app(app)
+    if app_config is None:
+        raise click.ClickException(
+            f"App '{app}' not found in config. Check your config.yaml."
+        )
+
+    remote_path = app_config.get("remote")
+    service = app_config.get("service")
+    target = config.target
+
+    click.echo(f"Connecting to {target['host']}...")
+
+    with SSHClient(host=target["host"], user=target["user"]) as ssh:
+        service_manager = ServiceManager(ssh)
+        deployer = Deployer(
+            ssh=ssh,
+            backup_dir=config.backup_dir,
+            max_backups=config.max_backups,
+        )
+
+        click.echo(f"Rolling back {app}...")
+
+        if service:
+            click.echo(f"  Stopping {service}...")
+
+        result = deployer.rollback(
+            app_name=app,
+            remote_path=remote_path,
+            service=service,
+            service_manager=service_manager,
+            version=version,
+        )
+
+        if not result.success:
+            raise click.ClickException(f"Rollback failed: {result.error_message}")
+
+        version_str = result.backup_path.split("/")[-1].replace(".bak", "")
+        click.echo(f"  Restored {version_str}")
+
+        if service:
+            click.echo(f"  Starting {service}...")
+            if result.health_check_passed:
+                click.echo(f"  Health check passed")
+            else:
+                click.echo(f"  Warning: Health check failed")
+
+        click.echo(f"Successfully rolled back {app} to {version_str}")
