@@ -320,5 +320,5 @@ class TestListPolishedOutput:
         )
 
         assert result.exit_code == 0
-        # Should show "current" marker for the deployed version
-        assert "current" in result.output.lower()
+        # Should show arrow symbol for the currently deployed version
+        assert SYMBOLS["arrow"] in result.output

@@ -236,6 +236,11 @@ def status(config_dir: Path | None):
         click.echo("No apps configured.")
         return
 
+    # Print header
+    header = f"    {'APP':<16} {'STATUS':<14}\t{'VERSION'}"
+    click.echo(click.style(header, fg="bright_black"))
+    click.echo(click.style("    " + "-" * 50, fg="bright_black"))
+
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
             service_manager = ServiceManager(ssh)
@@ -246,36 +251,52 @@ def status(config_dir: Path | None):
 
                 # Get version from history
                 last_deploy = history.get_last_deployment(app_name)
-                if last_deploy and last_deploy.success:
-                    version_str = click.style(last_deploy.binary_hash[:8], fg="cyan")
+                if last_deploy and last_deploy.success and last_deploy.backup_path:
+                    # Extract version from backup path (e.g., "20240115-143022" from ".../20240115-143022.bak")
+                    backup_filename = os.path.basename(last_deploy.backup_path)
+                    version_display = backup_filename.replace(".bak", "")
                 else:
-                    version_str = click.style("-", fg="bright_black")
+                    version_display = "-"
 
                 if service:
                     svc_status = service_manager.get_status(service)
                     if svc_status == ServiceStatus.RUNNING:
                         symbol = click.style(SYMBOLS["check"], fg="green")
-                        status_str = click.style("running", fg="green")
+                        status_text = "running"
+                        status_color = "green"
                     elif svc_status == ServiceStatus.STOPPED:
                         symbol = click.style(SYMBOLS["bullet"], fg="yellow")
-                        status_str = click.style("stopped", fg="yellow")
+                        status_text = "stopped"
+                        status_color = "yellow"
                     elif svc_status == ServiceStatus.FAILED:
                         symbol = click.style(SYMBOLS["cross"], fg="red")
-                        status_str = click.style("failed", fg="red")
+                        status_text = "failed"
+                        status_color = "red"
                     else:
                         symbol = click.style(SYMBOLS["bullet"], fg="white")
-                        status_str = "unknown"
+                        status_text = "unknown"
+                        status_color = "white"
                 else:
                     deployed = ssh.file_exists(remote_path)
                     if deployed:
                         symbol = click.style(SYMBOLS["bullet"], fg="green")
-                        status_str = click.style("deployed", fg="green")
+                        status_text = "deployed"
+                        status_color = "green"
                     else:
                         symbol = click.style(SYMBOLS["bullet"], fg="yellow")
-                        status_str = click.style("not deployed", fg="yellow")
+                        status_text = "not deployed"
+                        status_color = "yellow"
 
-                # Use fixed width columns for clean alignment
-                click.echo(f"  {symbol} {app_name:<18} {status_str:<16} {version_str}")
+                # Pad plain text first, then colorize
+                name_col = f"{app_name:<16}"
+                status_col = f"{status_text:<14}"
+                version_col = version_display
+
+                click.echo(
+                    f"  {symbol} {name_col}"
+                    f"{click.style(status_col, fg=status_color)}\t"
+                    f"{click.style(version_col, fg='white')}"
+                )
 
     except SSHError as e:
         raise click.ClickException(str(e))
@@ -331,6 +352,10 @@ def list_backups(app: str, config_dir: Path | None):
 
             click.echo(click.style(f"Backups for {app}:", bold=True))
             click.echo("")
+            # Print header
+            header = f"    {'VERSION':<18} {'TIMESTAMP'}"
+            click.echo(click.style(header, fg="bright_black"))
+            click.echo(click.style("    " + "-" * 40, fg="bright_black"))
             for backup in backups:
                 # Check if this is the currently deployed version
                 is_current = current_backup_path and backup["version"] in current_backup_path
@@ -338,14 +363,12 @@ def list_backups(app: str, config_dir: Path | None):
                 if is_current:
                     bullet = click.style(SYMBOLS["arrow"], fg="green")
                     version = click.style(backup["version"], fg="green")
-                    current_marker = click.style("  current", fg="green", bold=True)
                 else:
                     bullet = click.style(SYMBOLS["bullet"], fg="blue")
                     version = click.style(backup["version"], fg="blue")
-                    current_marker = ""
 
                 timestamp = click.style(backup["timestamp"], fg="bright_black")
-                click.echo(f"  {bullet} {version}  {timestamp}{current_marker}")
+                click.echo(f"  {bullet} {version}  {timestamp}")
 
         except SSHError as e:
             raise click.ClickException(str(e))
