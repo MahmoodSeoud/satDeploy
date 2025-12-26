@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "satdeploy"
+version = "0.1.0"
+description = "CLI tool for deploying binaries to embedded Linux targets"
+readme = "PLAN.md"
+requires-python = ">=3.8"
+dependencies = [
+    "click>=8.0",
+    "paramiko>=3.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-mock>=3.0",
+]
+
+[project.scripts]
+satdeploy = "satdeploy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["satdeploy*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
