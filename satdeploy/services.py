@@ -31,7 +31,7 @@ class ServiceManager:
         Returns:
             The service status.
         """
-        result = self._ssh.run(f"systemctl is-active {service}", check=False)
+        result = self._ssh.run(f"sudo systemctl is-active {service}", check=False)
         status_text = result.stdout.strip()
 
         if status_text == "active":
@@ -49,7 +49,7 @@ class ServiceManager:
         Args:
             service: The service name.
         """
-        self._ssh.run(f"systemctl stop {service}")
+        self._ssh.run(f"sudo systemctl stop {service}")
 
     def start(self, service: str) -> None:
         """Start a service.
@@ -57,7 +57,7 @@ class ServiceManager:
         Args:
             service: The service name.
         """
-        self._ssh.run(f"systemctl start {service}")
+        self._ssh.run(f"sudo systemctl start {service}")
 
     def restart(self, service: str) -> None:
         """Restart a service.
@@ -65,7 +65,7 @@ class ServiceManager:
         Args:
             service: The service name.
         """
-        self._ssh.run(f"systemctl restart {service}")
+        self._ssh.run(f"sudo systemctl restart {service}")
 
     def is_healthy(self, service: str) -> bool:
         """Check if a service is healthy (running).
@@ -89,7 +89,7 @@ class ServiceManager:
             The log output.
         """
         result = self._ssh.run(
-            f"journalctl -u {service} -n {lines} --no-pager",
+            f"sudo journalctl -u {service} -n {lines} --no-pager",
             check=False,
         )
         return result.stdout
