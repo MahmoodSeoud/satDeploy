@@ -9,6 +9,7 @@ from satdeploy.config import DEFAULT_CONFIG_DIR, Config
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
 from satdeploy.history import DeploymentRecord, History
+from satdeploy.output import success, error, warning, info, step, SYMBOLS
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 
@@ -43,7 +44,8 @@ def init(config_dir: Path | None):
             click.echo("Aborted.")
             return
 
-    click.echo("Setting up satdeploy configuration...")
+    click.echo(click.style("Setting up satdeploy configuration...", bold=True))
+    click.echo("")
     host = click.prompt("Target host (IP or hostname)")
     user = click.prompt("Target user", default="root")
 
@@ -58,7 +60,8 @@ def init(config_dir: Path | None):
     }
 
     config.save(data)
-    click.echo(f"Config saved to {config.config_path}")
+    click.echo("")
+    click.echo(success(f"Config saved to {config.config_path}"))
 
 
 @main.command()
@@ -147,28 +150,38 @@ def push(app: str, local: str | None, config_dir: Path | None):
             else:
                 services_to_manage = []
 
+            # Calculate total steps: backup + deploy + stop services + start services + health checks
+            num_services = len(services_to_manage)
+            total_steps = 2 + num_services * 2  # backup, deploy, stop each, start each
+            current_step = 0
+
             click.echo(f"Deploying {app}...")
 
             # Stop services in order
             for svc_app, svc_name in services_to_manage:
-                click.echo(f"  Stopping {svc_app} ({svc_name})...")
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
                 service_manager.stop(svc_name)
 
             # Backup and deploy
+            current_step += 1
+            click.echo(step(current_step, total_steps, f"Backing up {remote_path}"))
             backup_path = deployer.backup(app, remote_path)
+
+            current_step += 1
+            click.echo(step(current_step, total_steps, f"Uploading {local_path} {SYMBOLS['arrow']} {remote_path}"))
             deployer.deploy(local_path, remote_path)
             binary_hash = deployer.compute_hash(local_path)
 
-            click.echo(f"  Uploaded {local_path} -> {remote_path}")
-
             # Start services in reverse order
             for svc_app, svc_name in reversed(services_to_manage):
-                click.echo(f"  Starting {svc_app} ({svc_name})...")
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Starting {svc_app} ({svc_name})"))
                 service_manager.start(svc_name)
                 if service_manager.is_healthy(svc_name):
-                    click.echo(f"  Health check passed for {svc_app}")
+                    click.echo(success(f"Health check passed for {svc_app}"))
                 else:
-                    click.echo(f"  Warning: Health check failed for {svc_app}")
+                    click.echo(warning(f"Health check failed for {svc_app}"))
 
             # Log successful deployment
             history.record(DeploymentRecord(
@@ -180,7 +193,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 success=True,
             ))
 
-            click.echo(f"Successfully deployed {app} ({binary_hash})")
+            click.echo(success(f"Deployed {app} ({binary_hash})"))
 
     except SSHError as e:
         # Log failed deployment
@@ -214,6 +227,7 @@ def status(config_dir: Path | None):
 
     target = config.target
     apps = config.apps
+    history = get_history(config_dir)
 
     click.echo(f"Target: {target['host']} ({target['user']})")
     click.echo("")
@@ -221,6 +235,11 @@ def status(config_dir: Path | None):
     if not apps:
         click.echo("No apps configured.")
         return
+
+    # Print header
+    header = f"    {'APP':<16} {'STATUS':<14}\t{'VERSION'}"
+    click.echo(click.style(header, fg="bright_black"))
+    click.echo(click.style("    " + "-" * 50, fg="bright_black"))
 
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
@@ -230,21 +249,54 @@ def status(config_dir: Path | None):
                 service = app_config.get("service")
                 remote_path = app_config.get("remote")
 
+                # Get version from history
+                last_deploy = history.get_last_deployment(app_name)
+                if last_deploy and last_deploy.success and last_deploy.backup_path:
+                    # Extract version from backup path (e.g., "20240115-143022" from ".../20240115-143022.bak")
+                    backup_filename = os.path.basename(last_deploy.backup_path)
+                    version_display = backup_filename.replace(".bak", "")
+                else:
+                    version_display = "-"
+
                 if service:
                     svc_status = service_manager.get_status(service)
                     if svc_status == ServiceStatus.RUNNING:
-                        status_str = "running"
+                        symbol = click.style(SYMBOLS["check"], fg="green")
+                        status_text = "running"
+                        status_color = "green"
                     elif svc_status == ServiceStatus.STOPPED:
-                        status_str = "stopped"
+                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
+                        status_text = "stopped"
+                        status_color = "yellow"
                     elif svc_status == ServiceStatus.FAILED:
-                        status_str = "failed"
+                        symbol = click.style(SYMBOLS["cross"], fg="red")
+                        status_text = "failed"
+                        status_color = "red"
                     else:
-                        status_str = "unknown"
-                    click.echo(f"  {app_name}: {status_str} ({service})")
+                        symbol = click.style(SYMBOLS["bullet"], fg="white")
+                        status_text = "unknown"
+                        status_color = "white"
                 else:
                     deployed = ssh.file_exists(remote_path)
-                    status_str = "deployed" if deployed else "not deployed"
-                    click.echo(f"  {app_name}: {status_str} (library)")
+                    if deployed:
+                        symbol = click.style(SYMBOLS["bullet"], fg="green")
+                        status_text = "deployed"
+                        status_color = "green"
+                    else:
+                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
+                        status_text = "not deployed"
+                        status_color = "yellow"
+
+                # Pad plain text first, then colorize
+                name_col = f"{app_name:<16}"
+                status_col = f"{status_text:<14}"
+                version_col = version_display
+
+                click.echo(
+                    f"  {symbol} {name_col}"
+                    f"{click.style(status_col, fg=status_color)}\t"
+                    f"{click.style(version_col, fg='white')}"
+                )
 
     except SSHError as e:
         raise click.ClickException(str(e))
@@ -278,6 +330,11 @@ def list_backups(app: str, config_dir: Path | None):
         )
 
     target = config.target
+    history = get_history(config_dir)
+
+    # Get currently deployed version from history
+    last_deploy = history.get_last_deployment(app)
+    current_backup_path = last_deploy.backup_path if last_deploy and last_deploy.success else None
 
     with SSHClient(host=target["host"], user=target["user"]) as ssh:
         deployer = Deployer(
@@ -293,9 +350,25 @@ def list_backups(app: str, config_dir: Path | None):
                 click.echo(f"No backups found for {app}.")
                 return
 
-            click.echo(f"{'VERSION':<25} {'TIMESTAMP':<20}")
+            click.echo(click.style(f"Backups for {app}:", bold=True))
+            click.echo("")
+            # Print header
+            header = f"    {'VERSION':<18} {'TIMESTAMP'}"
+            click.echo(click.style(header, fg="bright_black"))
+            click.echo(click.style("    " + "-" * 40, fg="bright_black"))
             for backup in backups:
-                click.echo(f"{backup['version']:<25} {backup['timestamp']:<20}")
+                # Check if this is the currently deployed version
+                is_current = current_backup_path and backup["version"] in current_backup_path
+
+                if is_current:
+                    bullet = click.style(SYMBOLS["arrow"], fg="green")
+                    version = click.style(backup["version"], fg="green")
+                else:
+                    bullet = click.style(SYMBOLS["bullet"], fg="blue")
+                    version = click.style(backup["version"], fg="blue")
+
+                timestamp = click.style(backup["timestamp"], fg="bright_black")
+                click.echo(f"  {bullet} {version}  {timestamp}")
 
         except SSHError as e:
             raise click.ClickException(str(e))
@@ -378,11 +451,17 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             else:
                 services_to_manage = []
 
+            # Calculate total steps: restore + stop services + start services
+            num_services = len(services_to_manage)
+            total_steps = 1 + num_services * 2  # restore, stop each, start each
+            current_step = 0
+
             click.echo(f"Rolling back {app}...")
 
             # Stop services in order
             for svc_app, svc_name in services_to_manage:
-                click.echo(f"  Stopping {svc_app} ({svc_name})...")
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
                 service_manager.stop(svc_name)
 
             # Get backup list and find the right one
@@ -402,19 +481,20 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             version_str = backup["version"]
 
             # Restore the backup
+            current_step += 1
+            click.echo(step(current_step, total_steps, f"Restoring {version_str}"))
             ssh.run(f"cp '{backup_path}' '{remote_path}'")
             ssh.run(f"chmod +x '{remote_path}'")
 
-            click.echo(f"  Restored {version_str}")
-
             # Start services in reverse order
             for svc_app, svc_name in reversed(services_to_manage):
-                click.echo(f"  Starting {svc_app} ({svc_name})...")
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Starting {svc_app} ({svc_name})"))
                 service_manager.start(svc_name)
                 if service_manager.is_healthy(svc_name):
-                    click.echo(f"  Health check passed for {svc_app}")
+                    click.echo(success(f"Health check passed for {svc_app}"))
                 else:
-                    click.echo(f"  Warning: Health check failed for {svc_app}")
+                    click.echo(warning(f"Health check failed for {svc_app}"))
 
             # Log successful rollback
             history.record(DeploymentRecord(
@@ -426,7 +506,7 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                 success=True,
             ))
 
-            click.echo(f"Successfully rolled back {app} to {version_str}")
+            click.echo(success(f"Rolled back {app} to {version_str}"))
 
     except SSHError as e:
         # Log failed rollback
@@ -487,6 +567,8 @@ def logs(app: str, lines: int, config_dir: Path | None):
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
             service_manager = ServiceManager(ssh)
+            click.echo(click.style(f"Logs for {app} ({service}):", bold=True))
+            click.echo("")
             log_output = service_manager.get_logs(service, lines=lines)
             click.echo(log_output)
 

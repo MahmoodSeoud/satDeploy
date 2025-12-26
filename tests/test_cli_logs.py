@@ -4,6 +4,7 @@ import pytest
 from click.testing import CliRunner
 
 from satdeploy.cli import main
+from satdeploy.output import SYMBOLS
 
 
 class TestLogsCommand:
@@ -113,3 +114,49 @@ apps:
         mock_ssh.run.assert_called()
         call_args = str(mock_ssh.run.call_args)
         assert "-n 100" in call_args or "-n100" in call_args
+
+
+class TestLogsPolishedOutput:
+    """Tests for polished CLI output formatting."""
+
+    @pytest.fixture
+    def runner(self):
+        return CliRunner()
+
+    @pytest.fixture
+    def config_with_app(self, tmp_path):
+        """Create a config file with an app that has a service."""
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text("""
+target:
+  host: 192.168.1.50
+  user: root
+backup_dir: /opt/satdeploy/backups
+max_backups: 10
+apps:
+  controller:
+    local: ./build/controller
+    remote: /opt/disco/bin/controller
+    service: controller.service
+""")
+        return config_dir
+
+    def test_logs_shows_header(self, runner, config_with_app, mocker):
+        """Logs command should show a header with app name."""
+        mock_ssh = mocker.MagicMock()
+        mock_ssh.__enter__ = mocker.MagicMock(return_value=mock_ssh)
+        mock_ssh.__exit__ = mocker.MagicMock(return_value=False)
+        mock_ssh.run.return_value.stdout = "Dec 26 10:00:00 flatsat controller[1234]: Starting up"
+
+        mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
+
+        result = runner.invoke(
+            main,
+            ["logs", "controller", "--config-dir", str(config_with_app)],
+            color=True,
+        )
+
+        assert result.exit_code == 0
+        assert "controller" in result.output

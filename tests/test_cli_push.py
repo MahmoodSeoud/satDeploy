@@ -8,6 +8,7 @@ import yaml
 from click.testing import CliRunner
 
 from satdeploy.cli import main
+from satdeploy.output import SYMBOLS
 
 
 class TestPushCommand:
@@ -637,3 +638,135 @@ class TestPushHistoryLogging:
         assert len(records) == 1
         assert records[0].success is False
         assert "Connection refused" in records[0].error_message
+
+
+class TestPushPolishedOutput:
+    """Tests for polished CLI output formatting."""
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_shows_step_counters(self, mock_ssh_class, tmp_path):
+        """Push should show step counters like [1/5]."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": str(binary),
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config-dir", str(config_dir)],
+            color=True,
+        )
+
+        assert result.exit_code == 0
+        # Should have step counters in output
+        assert "[1/" in result.output
+        assert "[2/" in result.output
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_success_shows_checkmark(self, mock_ssh_class, tmp_path):
+        """Successful push should show checkmark symbol."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": str(binary),
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config-dir", str(config_dir)],
+            color=True,
+        )
+
+        assert result.exit_code == 0
+        assert SYMBOLS["check"] in result.output
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_shows_arrow_for_upload(self, mock_ssh_class, tmp_path):
+        """Push should show arrow symbol for file transfer."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": str(binary),
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config-dir", str(config_dir)],
+            color=True,
+        )
+
+        assert result.exit_code == 0
+        assert SYMBOLS["arrow"] in result.output

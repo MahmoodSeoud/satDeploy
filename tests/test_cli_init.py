@@ -8,6 +8,7 @@ import yaml
 from click.testing import CliRunner
 
 from satdeploy.cli import main
+from satdeploy.output import SYMBOLS
 
 
 class TestInitCommand:
@@ -126,3 +127,22 @@ class TestInitCommand:
 
         config = yaml.safe_load((config_dir / "config.yaml").read_text())
         assert config["target"]["host"] == "192.168.1.50"
+
+
+class TestInitPolishedOutput:
+    """Tests for polished CLI output formatting."""
+
+    def test_init_success_shows_checkmark(self, tmp_path):
+        """Init should show checkmark when config is saved."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+
+        result = runner.invoke(
+            main,
+            ["init", "--config-dir", str(config_dir)],
+            input="192.168.1.50\nroot\n",
+            color=True,
+        )
+
+        assert result.exit_code == 0
+        assert SYMBOLS["check"] in result.output
