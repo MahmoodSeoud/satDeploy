@@ -333,51 +333,53 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
     remote_path = app_config.get("remote")
     service = app_config.get("service")
     target = config.target
+    history = get_history(config_dir)
+    backup_path = None
 
     click.echo(f"Connecting to {target['host']}...")
 
-    with SSHClient(host=target["host"], user=target["user"]) as ssh:
-        service_manager = ServiceManager(ssh)
-        deployer = Deployer(
-            ssh=ssh,
-            backup_dir=config.backup_dir,
-            max_backups=config.max_backups,
-        )
+    try:
+        with SSHClient(host=target["host"], user=target["user"]) as ssh:
+            service_manager = ServiceManager(ssh)
+            deployer = Deployer(
+                ssh=ssh,
+                backup_dir=config.backup_dir,
+                max_backups=config.max_backups,
+            )
 
-        # Resolve dependencies
-        resolver = DependencyResolver(config.apps)
+            # Resolve dependencies
+            resolver = DependencyResolver(config.apps)
 
-        # Check for cycles
-        if resolver.has_cycle():
-            raise click.ClickException("Cyclic dependency detected in config")
+            # Check for cycles
+            if resolver.has_cycle():
+                raise click.ClickException("Cyclic dependency detected in config")
 
-        # For libraries with restart list, use that
-        restart_apps = resolver.get_restart_apps(app)
-        if restart_apps:
-            # Library with restart list
-            services_to_manage = []
-            for restart_app in restart_apps:
-                restart_config = config.get_app(restart_app)
-                if restart_config and restart_config.get("service"):
-                    services_to_manage.append(
-                        (restart_app, restart_config.get("service"))
-                    )
-        elif service:
-            # Service with dependencies
-            stop_order = resolver.get_stop_order(app)
-            services_to_manage = []
-            for dep_app in stop_order:
-                dep_config = config.get_app(dep_app)
-                if dep_config and dep_config.get("service"):
-                    services_to_manage.append(
-                        (dep_app, dep_config.get("service"))
-                    )
-        else:
-            services_to_manage = []
+            # For libraries with restart list, use that
+            restart_apps = resolver.get_restart_apps(app)
+            if restart_apps:
+                # Library with restart list
+                services_to_manage = []
+                for restart_app in restart_apps:
+                    restart_config = config.get_app(restart_app)
+                    if restart_config and restart_config.get("service"):
+                        services_to_manage.append(
+                            (restart_app, restart_config.get("service"))
+                        )
+            elif service:
+                # Service with dependencies
+                stop_order = resolver.get_stop_order(app)
+                services_to_manage = []
+                for dep_app in stop_order:
+                    dep_config = config.get_app(dep_app)
+                    if dep_config and dep_config.get("service"):
+                        services_to_manage.append(
+                            (dep_app, dep_config.get("service"))
+                        )
+            else:
+                services_to_manage = []
 
-        click.echo(f"Rolling back {app}...")
+            click.echo(f"Rolling back {app}...")
 
-        try:
             # Stop services in order
             for svc_app, svc_name in services_to_manage:
                 click.echo(f"  Stopping {svc_app} ({svc_name})...")
@@ -414,10 +416,30 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                 else:
                     click.echo(f"  Warning: Health check failed for {svc_app}")
 
+            # Log successful rollback
+            history.record(DeploymentRecord(
+                app=app,
+                binary_hash=version_str,
+                remote_path=remote_path,
+                backup_path=backup_path,
+                action="rollback",
+                success=True,
+            ))
+
             click.echo(f"Successfully rolled back {app} to {version_str}")
 
-        except SSHError as e:
-            raise click.ClickException(str(e))
+    except SSHError as e:
+        # Log failed rollback
+        history.record(DeploymentRecord(
+            app=app,
+            binary_hash="",
+            remote_path=remote_path,
+            backup_path=backup_path or "",
+            action="rollback",
+            success=False,
+            error_message=str(e),
+        ))
+        raise click.ClickException(str(e))
 
 
 @main.command()
