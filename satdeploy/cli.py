@@ -164,12 +164,15 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 service_manager.stop(svc_name)
 
             # Backup and deploy
+            remote_target = f"{target['user']}@{target['host']}:{remote_path}"
+
             current_step += 1
-            click.echo(step(current_step, total_steps, f"Backing up {remote_path}"))
+            click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
             backup_path = deployer.backup(app, remote_path)
 
             current_step += 1
-            click.echo(step(current_step, total_steps, f"Uploading {local_path} {SYMBOLS['arrow']} {remote_path}"))
+            click.echo(step(current_step, total_steps, f"Uploading {local_path}"))
+            click.echo(f"                {SYMBOLS['arrow']} {remote_target}")
             deployer.deploy(local_path, remote_path)
             binary_hash = deployer.compute_hash(local_path)
 
@@ -237,9 +240,9 @@ def status(config_dir: Path | None):
         return
 
     # Print header
-    header = f"    {'APP':<16} {'STATUS':<14}\t{'VERSION'}"
+    header = f"    {'APP':<16}\t{'STATUS':<14}\t{'HASH':<10}\t{'TIMESTAMP'}"
     click.echo(click.style(header, fg="bright_black"))
-    click.echo(click.style("    " + "-" * 50, fg="bright_black"))
+    click.echo(click.style("    " + "-" * 60, fg="bright_black"))
 
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
@@ -249,16 +252,31 @@ def status(config_dir: Path | None):
                 service = app_config.get("service")
                 remote_path = app_config.get("remote")
 
-                # Get version from history
-                last_deploy = history.get_last_deployment(app_name)
-                if last_deploy and last_deploy.success and last_deploy.backup_path:
-                    # Extract version from backup path (e.g., "20240115-143022" from ".../20240115-143022.bak")
-                    backup_filename = os.path.basename(last_deploy.backup_path)
-                    version_display = backup_filename.replace(".bak", "")
-                else:
-                    version_display = "-"
+                # First check if file exists
+                deployed = ssh.file_exists(remote_path)
 
-                if service:
+                # Get hash and timestamp from history (only if actually deployed)
+                hash_display = "-"
+                timestamp_display = "-"
+                if deployed:
+                    last_deploy = history.get_last_deployment(app_name)
+                    if last_deploy and last_deploy.success:
+                        # Use binary_hash and timestamp directly from history record
+                        hash_display = last_deploy.binary_hash or "-"
+                        if last_deploy.timestamp:
+                            from datetime import datetime
+                            try:
+                                dt = datetime.fromisoformat(last_deploy.timestamp)
+                                timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
+                            except ValueError:
+                                timestamp_display = "-"
+
+                if not deployed:
+                    symbol = click.style(SYMBOLS["bullet"], fg="yellow")
+                    status_text = "not deployed"
+                    status_color = "yellow"
+                elif service:
+                    # File exists and has a service - check service status
                     svc_status = service_manager.get_status(service)
                     if svc_status == ServiceStatus.RUNNING:
                         symbol = click.style(SYMBOLS["check"], fg="green")
@@ -277,25 +295,22 @@ def status(config_dir: Path | None):
                         status_text = "unknown"
                         status_color = "white"
                 else:
-                    deployed = ssh.file_exists(remote_path)
-                    if deployed:
-                        symbol = click.style(SYMBOLS["bullet"], fg="green")
-                        status_text = "deployed"
-                        status_color = "green"
-                    else:
-                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
-                        status_text = "not deployed"
-                        status_color = "yellow"
+                    # File exists but no service (library)
+                    symbol = click.style(SYMBOLS["bullet"], fg="green")
+                    status_text = "deployed"
+                    status_color = "green"
 
                 # Pad plain text first, then colorize
                 name_col = f"{app_name:<16}"
                 status_col = f"{status_text:<14}"
-                version_col = version_display
+                hash_col = f"{hash_display:<10}"
+                timestamp_col = timestamp_display
 
                 click.echo(
-                    f"  {symbol} {name_col}"
+                    f"  {symbol} {name_col}\t"
                     f"{click.style(status_col, fg=status_color)}\t"
-                    f"{click.style(version_col, fg='white')}"
+                    f"{click.style(hash_col, fg='white')}\t"
+                    f"{click.style(timestamp_col, fg='bright_black')}"
                 )
 
     except SSHError as e:
@@ -311,9 +326,12 @@ def status(config_dir: Path | None):
     help="Config directory (default: ~/.satdeploy)",
 )
 def list_backups(app: str, config_dir: Path | None):
-    """Show available backups for an app.
+    """List all versions of an app (deployed + backups).
 
-    APP is the name of the application to list backups for.
+    APP is the name of the application to list versions for.
+
+    Shows the currently deployed version at the top, followed by
+    all available backups that can be restored via rollback.
     """
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     config = Config(config_dir=config_dir)
@@ -334,7 +352,6 @@ def list_backups(app: str, config_dir: Path | None):
 
     # Get currently deployed version from history
     last_deploy = history.get_last_deployment(app)
-    current_backup_path = last_deploy.backup_path if last_deploy and last_deploy.success else None
 
     with SSHClient(host=target["host"], user=target["user"]) as ssh:
         deployer = Deployer(
@@ -346,29 +363,49 @@ def list_backups(app: str, config_dir: Path | None):
         try:
             backups = deployer.list_backups(app)
 
-            if not backups:
-                click.echo(f"No backups found for {app}.")
+            # Check if we have anything to show
+            has_deployed = last_deploy and last_deploy.success
+            has_backups = len(backups) > 0
+
+            if not has_deployed and not has_backups:
+                click.echo(f"No versions found for {app}.")
                 return
 
-            click.echo(click.style(f"Backups for {app}:", bold=True))
+            click.echo(click.style(f"Versions for {app}:", bold=True))
             click.echo("")
             # Print header
-            header = f"    {'VERSION':<18} {'TIMESTAMP'}"
+            header = f"    {'HASH':<10}\t{'TIMESTAMP':<20}\t{'STATUS'}"
             click.echo(click.style(header, fg="bright_black"))
-            click.echo(click.style("    " + "-" * 40, fg="bright_black"))
+            click.echo(click.style("    " + "-" * 45, fg="bright_black"))
+
+            # Show currently deployed version first
+            if has_deployed:
+                hash_display = last_deploy.binary_hash or "-"
+                timestamp_display = "-"
+                if last_deploy.timestamp:
+                    from datetime import datetime
+                    try:
+                        dt = datetime.fromisoformat(last_deploy.timestamp)
+                        timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        timestamp_display = "-"
+
+                bullet = click.style(SYMBOLS["arrow"], fg="green")
+                hash_col = click.style(f"{hash_display:<10}", fg="green")
+                timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
+                status_col = click.style("deployed", fg="green")
+                click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
+
+            # Show backups
             for backup in backups:
-                # Check if this is the currently deployed version
-                is_current = current_backup_path and backup["version"] in current_backup_path
+                hash_display = backup.get("hash") or "-"
+                timestamp_display = backup.get("timestamp") or "-"
 
-                if is_current:
-                    bullet = click.style(SYMBOLS["arrow"], fg="green")
-                    version = click.style(backup["version"], fg="green")
-                else:
-                    bullet = click.style(SYMBOLS["bullet"], fg="blue")
-                    version = click.style(backup["version"], fg="blue")
-
-                timestamp = click.style(backup["timestamp"], fg="bright_black")
-                click.echo(f"  {bullet} {version}  {timestamp}")
+                bullet = click.style(SYMBOLS["bullet"], fg="blue")
+                hash_col = click.style(f"{hash_display:<10}", fg="blue")
+                timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
+                status_col = click.style("backup", fg="blue")
+                click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
 
         except SSHError as e:
             raise click.ClickException(str(e))
@@ -478,11 +515,12 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                 backup = backups[0]
 
             backup_path = backup["path"]
-            version_str = backup["version"]
+            backup_hash = backup.get("hash") or "-"
+            backup_timestamp = backup.get("timestamp") or "-"
 
             # Restore the backup
             current_step += 1
-            click.echo(step(current_step, total_steps, f"Restoring {version_str}"))
+            click.echo(step(current_step, total_steps, f"Restoring {backup_hash} ({backup_timestamp})"))
             ssh.run(f"cp '{backup_path}' '{remote_path}'")
             ssh.run(f"chmod +x '{remote_path}'")
 
@@ -499,14 +537,14 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             # Log successful rollback
             history.record(DeploymentRecord(
                 app=app,
-                binary_hash=version_str,
+                binary_hash=backup_hash,
                 remote_path=remote_path,
                 backup_path=backup_path,
                 action="rollback",
                 success=True,
             ))
 
-            click.echo(success(f"Rolled back {app} to {version_str}"))
+            click.echo(success(f"Rolled back {app} to {backup_hash} ({backup_timestamp})"))
 
     except SSHError as e:
         # Log failed rollback

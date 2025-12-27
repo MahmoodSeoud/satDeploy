@@ -3,7 +3,7 @@
 import click
 
 SYMBOLS = {
-    "check": "✓",
+    "check": "▸",
     "cross": "✗",
     "arrow": "→",
     "bullet": "•",
@@ -32,5 +32,5 @@ def info(message: str) -> str:
 
 def step(current: int, total: int, message: str) -> str:
     """Format a step counter message."""
-    counter = click.style(f"[{current}/{total}]", fg="cyan")
+    counter = click.style(f"[{current}/{total}]", fg="bright_white")
     return f"{counter} {message}"

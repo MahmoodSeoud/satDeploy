@@ -17,7 +17,7 @@ class TestSymbols:
 
     def test_check_symbol_defined(self):
         assert "check" in SYMBOLS
-        assert SYMBOLS["check"] == "✓"
+        assert SYMBOLS["check"] == "▸"
 
     def test_cross_symbol_defined(self):
         assert "cross" in SYMBOLS
@@ -37,9 +37,9 @@ class TestMessageFormatters:
 
     def test_success_returns_green_with_check(self):
         result = success("Done")
-        assert "✓" in result
+        assert "▸" in result
         # The result should contain ANSI color codes for green
-        assert "\x1b[" in result or result == "✓ Done"
+        assert "\x1b[" in result or result == "▸ Done"
 
     def test_error_returns_red_with_cross(self):
         result = error("Failed")

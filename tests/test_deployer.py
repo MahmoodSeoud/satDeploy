@@ -69,7 +69,7 @@ class TestBackup:
     def test_backup_creates_backup_directory(self):
         """Should create backup directory if it doesn't exist."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="abc12345def67890  /opt/disco/bin/controller\n")
         mock_ssh.file_exists.return_value = True
 
         deployer = Deployer(
@@ -86,7 +86,7 @@ class TestBackup:
     def test_backup_copies_current_binary(self):
         """Should copy current binary to backup location."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="abc12345def67890  /opt/disco/bin/controller\n")
         mock_ssh.file_exists.return_value = True
 
         deployer = Deployer(
@@ -104,7 +104,7 @@ class TestBackup:
     def test_backup_returns_backup_path(self):
         """Should return the path where backup was created."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="abc12345def67890  /opt/disco/bin/controller\n")
         mock_ssh.file_exists.return_value = True
 
         deployer = Deployer(
@@ -233,7 +233,7 @@ class TestPush:
     def test_push_stops_service_before_deploy(self, tmp_path):
         """Push should stop the service before deploying."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="abc12345def67890  /path\n")
         mock_ssh.file_exists.return_value = True
 
         mock_services = Mock()
@@ -260,7 +260,7 @@ class TestPush:
     def test_push_starts_service_after_deploy(self, tmp_path):
         """Push should start the service after deploying."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="abc12345def67890  /path\n")
         mock_ssh.file_exists.return_value = True
 
         mock_services = Mock()
@@ -287,7 +287,7 @@ class TestPush:
     def test_push_performs_health_check(self, tmp_path):
         """Push should perform a health check after starting service."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="abc12345def67890  /path\n")
         mock_ssh.file_exists.return_value = True
 
         mock_services = Mock()
@@ -315,7 +315,7 @@ class TestPush:
     def test_push_result_includes_hash(self, tmp_path):
         """Push result should include the binary hash."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="abc12345def67890  /path\n")
         mock_ssh.file_exists.return_value = True
 
         mock_services = Mock()
@@ -343,7 +343,7 @@ class TestPush:
     def test_push_without_service_skips_service_management(self, tmp_path):
         """Push for library (no service) should skip service management."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="abc12345def67890  /path\n")
         mock_ssh.file_exists.return_value = True
 
         mock_services = Mock()

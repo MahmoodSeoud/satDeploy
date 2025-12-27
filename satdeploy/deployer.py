@@ -10,13 +10,28 @@ if TYPE_CHECKING:
     from satdeploy.ssh import SSHClient
 
 
-def parse_backup_timestamp(version: str) -> str:
-    """Parse version string (YYYYMMDD-HHMMSS) to human-readable timestamp."""
+def parse_backup_version(version: str) -> dict:
+    """Parse version string to extract timestamp and hash.
+
+    Supports both old format (YYYYMMDD-HHMMSS) and new format (YYYYMMDD-HHMMSS-hash).
+    """
+    parts = version.split("-")
+    if len(parts) >= 3:
+        # New format: YYYYMMDD-HHMMSS-hash
+        timestamp_str = f"{parts[0]}-{parts[1]}"
+        binary_hash = parts[2] if len(parts) > 2 else None
+    else:
+        # Old format: YYYYMMDD-HHMMSS
+        timestamp_str = version
+        binary_hash = None
+
     try:
-        dt = datetime.strptime(version, "%Y%m%d-%H%M%S")
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
+        dt = datetime.strptime(timestamp_str, "%Y%m%d-%H%M%S")
+        timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
     except ValueError:
-        return version
+        timestamp = version
+
+    return {"timestamp": timestamp, "hash": binary_hash}
 
 
 @dataclass
@@ -59,6 +74,21 @@ class Deployer:
                 sha256.update(chunk)
         return sha256.hexdigest()[:8]
 
+    def compute_remote_hash(self, remote_path: str) -> Optional[str]:
+        """Compute SHA256 hash of a remote file.
+
+        Args:
+            remote_path: Path to the remote file.
+
+        Returns:
+            First 8 characters of the hex digest, or None if file doesn't exist.
+        """
+        result = self._ssh.run(f"sha256sum '{remote_path}' 2>/dev/null", check=False)
+        if result.exit_code != 0 or not result.stdout.strip():
+            return None
+        # sha256sum output: "hash  filename"
+        return result.stdout.strip().split()[0][:8]
+
     def list_backups(self, app_name: str) -> list[dict]:
         """List available backups for an app.
 
@@ -66,7 +96,7 @@ class Deployer:
             app_name: The application name.
 
         Returns:
-            List of backup info dicts with keys: version, timestamp, path.
+            List of backup info dicts with keys: version, timestamp, hash, path.
             Sorted by version (newest first).
         """
         backup_dir = f"{self._backup_dir}/{app_name}"
@@ -77,9 +107,11 @@ class Deployer:
             if not line or not line.endswith(".bak"):
                 continue
             version = line.replace(".bak", "")
+            parsed = parse_backup_version(version)
             backups.append({
                 "version": version,
-                "timestamp": parse_backup_timestamp(version),
+                "timestamp": parsed["timestamp"],
+                "hash": parsed["hash"],
                 "path": f"{backup_dir}/{line}",
             })
 
@@ -102,8 +134,14 @@ class Deployer:
         backup_dir = f"{self._backup_dir}/{app_name}"
         self._ssh.run(f"mkdir -p '{backup_dir}'")
 
+        # Compute hash of file being backed up
+        file_hash = self.compute_remote_hash(remote_path)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        backup_path = f"{backup_dir}/{timestamp}.bak"
+
+        if file_hash:
+            backup_path = f"{backup_dir}/{timestamp}-{file_hash}.bak"
+        else:
+            backup_path = f"{backup_dir}/{timestamp}.bak"
 
         self._ssh.run(f"cp '{remote_path}' '{backup_path}'")
 
