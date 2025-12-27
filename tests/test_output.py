@@ -45,6 +45,11 @@ class TestMessageFormatters:
         result = warning("Caution")
         assert "\x1b[" in result or "Caution" in result
 
+    def test_warning_has_prefix(self):
+        result = warning("Something might be wrong")
+        assert "[WARNING]" in result
+        assert "Something might be wrong" in result
+
     def test_error_returns_red(self):
         result = error("Failed")
         assert "Failed" in result

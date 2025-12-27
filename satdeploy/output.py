@@ -16,8 +16,8 @@ def success(message: str) -> str:
 
 
 def warning(message: str) -> str:
-    """Format a warning message with yellow color."""
-    return click.style(message, fg="yellow")
+    """Format a warning message with yellow color and [WARNING] prefix."""
+    return click.style(f"[WARNING] {message}", fg="yellow")
 
 
 def error(message: str) -> str:
