@@ -211,9 +211,82 @@ def push(app: str, local: str | None, config_dir: Path | None):
 
             services_to_manage = get_services_to_manage(config, app, service)
 
-            # Calculate total steps: backup + deploy + stop services + start services
-            num_services = len(services_to_manage)
-            total_steps = 2 + num_services * 2  # backup, deploy, stop each, start each
+            # Check if local and remote are the same - skip if already deployed
+            local_hash = deployer.compute_hash(local_path)
+            remote_hash = deployer.compute_remote_hash(remote_path)
+
+            if local_hash and remote_hash and local_hash == remote_hash:
+                # Still record in history so it becomes the "current" version
+                history.record(DeploymentRecord(
+                    app=app,
+                    binary_hash=local_hash,
+                    remote_path=remote_path,
+                    action="push",
+                    success=True,
+                ))
+                click.echo(warning(f"{app} ({local_hash}) is already deployed. Marked as current."))
+                return
+
+            # Check if local version already exists in backups - restore instead of upload
+            existing_backups = deployer.list_backups(app)
+            existing_hashes = {b.get("hash"): b for b in existing_backups if b.get("hash")}
+
+            local_in_backups = local_hash in existing_hashes
+            remote_needs_backup = remote_hash and remote_hash not in existing_hashes
+
+            if local_in_backups:
+                # Version exists in backups - restore it instead of uploading
+                backup = existing_hashes[local_hash]
+                backup_path = backup["path"]
+
+                # Still need to backup current remote if not in backups
+                total_steps = (1 if remote_needs_backup else 0) + 1 + len(services_to_manage) * 2
+                current_step = 0
+
+                click.echo(f"Restoring {app} from backup...")
+
+                # Stop services
+                for svc_app, svc_name in services_to_manage:
+                    current_step += 1
+                    click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
+                    service_manager.stop(svc_name)
+
+                # Backup current if needed
+                if remote_needs_backup:
+                    remote_target = f"{target['user']}@{target['host']}:{remote_path}"
+                    current_step += 1
+                    click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
+                    deployer.backup(app, remote_path)
+
+                # Restore from backup
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Restoring {local_hash} from backup"))
+                ssh.run(f"cp '{backup_path}' '{remote_path}'")
+                ssh.run(f"chmod +x '{remote_path}'")
+
+                # Start services
+                for svc_app, svc_name in reversed(services_to_manage):
+                    current_step += 1
+                    click.echo(step(current_step, total_steps, f"Starting {svc_app} ({svc_name})"))
+                    service_manager.start(svc_name)
+                    if service_manager.is_healthy(svc_name):
+                        click.echo(success(f"Health check passed for {svc_app}"))
+                    else:
+                        click.echo(warning(f"Health check failed for {svc_app}"))
+
+                history.record(DeploymentRecord(
+                    app=app,
+                    binary_hash=local_hash,
+                    remote_path=remote_path,
+                    backup_path=backup_path,
+                    action="push",
+                    success=True,
+                ))
+                click.echo(warning(f"{app} ({local_hash}) restored from backup. Marked as current."))
+                return
+
+            # Fresh deploy - upload new binary
+            total_steps = (1 if remote_needs_backup else 0) + 1 + len(services_to_manage) * 2
             current_step = 0
 
             click.echo(f"Deploying {app}...")
@@ -224,18 +297,19 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
                 service_manager.stop(svc_name)
 
-            # Backup and deploy
+            # Backup current version only if not already in backups
             remote_target = f"{target['user']}@{target['host']}:{remote_path}"
+            backup_path = None
 
-            current_step += 1
-            click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
-            backup_path = deployer.backup(app, remote_path)
+            if remote_needs_backup:
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
+                backup_path = deployer.backup(app, remote_path)
 
             current_step += 1
             click.echo(step(current_step, total_steps, f"Uploading {local_path}"))
             click.echo(f"                {SYMBOLS['arrow']} {remote_target}")
             deployer.deploy(local_path, remote_path)
-            binary_hash = deployer.compute_hash(local_path)
 
             # Start services in reverse order
             for svc_app, svc_name in reversed(services_to_manage):
@@ -250,14 +324,14 @@ def push(app: str, local: str | None, config_dir: Path | None):
             # Log successful deployment
             history.record(DeploymentRecord(
                 app=app,
-                binary_hash=binary_hash,
+                binary_hash=local_hash,
                 remote_path=remote_path,
                 backup_path=backup_path,
                 action="push",
                 success=True,
             ))
 
-            click.echo(success(f"Deployed {app} ({binary_hash})"))
+            click.echo(success(f"Deployed {app} ({local_hash})"))
 
     except SSHError as e:
         # Log failed deployment
@@ -431,6 +505,7 @@ def list_backups(app: str, config_dir: Path | None):
                     seen_keys[key] = backup
 
             # Add currently deployed version if not in backups (e.g., after first push)
+            # Use history timestamp only for versions with no backup yet
             if current_hash and current_hash not in seen_keys:
                 timestamp_display = format_iso_timestamp(last_deploy.timestamp)
                 seen_keys[current_hash] = {
@@ -438,8 +513,9 @@ def list_backups(app: str, config_dir: Path | None):
                     "timestamp": timestamp_display,
                 }
 
-            # Build unified list of unique versions
+            # Build unified list sorted by timestamp (newest first)
             versions = list(seen_keys.values())
+            versions.sort(key=lambda v: v.get("timestamp", ""), reverse=True)
 
             if not versions:
                 click.echo(f"No versions found for {app}.")
@@ -523,7 +599,21 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             services_to_manage = get_services_to_manage(config, app, service)
 
             # Get backup list and find the right one
-            backups = deployer.list_backups(app)
+            raw_backups = deployer.list_backups(app)
+            if not raw_backups:
+                raise click.ClickException("No backups available for rollback")
+
+            # Deduplicate backups by hash, keeping most recent (first in list)
+            # This prevents the dial from bouncing between duplicate backups
+            # Skip old-format backups without hash - they're not supported
+            seen_hashes = set()
+            backups = []
+            for b in raw_backups:
+                h = b.get("hash")
+                if h and h not in seen_hashes:
+                    seen_hashes.add(h)
+                    backups.append(b)
+
             if not backups:
                 raise click.ClickException("No backups available for rollback")
 
@@ -532,13 +622,14 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             current_hash = last_deploy.binary_hash if last_deploy and last_deploy.success else None
 
             if version:
-                matching = [b for b in backups if b["version"] == version]
+                # For explicit version, search raw backups (allow selecting specific backup)
+                matching = [b for b in raw_backups if b["version"] == version]
                 if not matching:
                     raise click.ClickException(f"Version {version} not found")
                 backup = matching[0]
             elif current_hash:
                 # Dial behavior: find current position and go to next older version
-                # Backups are sorted newest-first, so "next older" means index + 1
+                # Backups are deduplicated and sorted newest-first
                 current_index = None
                 for i, b in enumerate(backups):
                     if b.get("hash") == current_hash:
@@ -549,9 +640,8 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                     # Current version is in backups, go to next older
                     next_index = current_index + 1
                     if next_index >= len(backups):
-                        raise click.ClickException(
-                            "Already at oldest version. No older backup available."
-                        )
+                        click.echo(warning("Already at oldest version. No older backup available."))
+                        return
                     backup = backups[next_index]
                 else:
                     # Current version not in backups (fresh deploy), go to most recent

@@ -92,7 +92,7 @@ class TestListCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n20240114-091500.bak\n",
+            stdout="20240115-143022-abc12345.bak\n20240114-091500-def67890.bak\n",
             exit_code=0,
         )
 
@@ -133,7 +133,7 @@ class TestListCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
@@ -213,7 +213,7 @@ class TestListPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n20240114-091500.bak\n",
+            stdout="20240115-143022-abc12345.bak\n20240114-091500-def67890.bak\n",
             exit_code=0,
         )
 
@@ -253,7 +253,7 @@ class TestListPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
@@ -323,3 +323,67 @@ class TestListPolishedOutput:
         assert result.exit_code == 0
         # Should show arrow symbol for the currently deployed version
         assert SYMBOLS["arrow"] in result.output
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_list_sorts_by_timestamp_newest_first(self, mock_ssh_class, tmp_path):
+        """List should sort versions by timestamp, newest first."""
+        from satdeploy.history import History, DeploymentRecord
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        # Add a deployment to history with a hash not in backups (newest)
+        history = History(config_dir / "history.db")
+        history.init_db()
+        history.record(DeploymentRecord(
+            app="controller",
+            binary_hash="newest11",
+            remote_path="/opt/disco/bin/controller",
+            action="push",
+            success=True,
+        ))
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        # Return older backups
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022-older111.bak\n20240114-091500-oldest11.bak\n",
+            exit_code=0,
+        )
+
+        result = runner.invoke(
+            main,
+            ["list", "controller", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+        # Find positions of timestamps in output
+        output = result.output
+        pos_newest = output.find("newest11")
+        pos_older = output.find("older111")
+        pos_oldest = output.find("oldest11")
+
+        # All three should be present and in order (newest first)
+        assert pos_newest != -1, "newest11 not found in output"
+        assert pos_older != -1, "older111 not found in output"
+        assert pos_oldest != -1, "oldest11 not found in output"
+        assert pos_newest < pos_older < pos_oldest, \
+            f"Versions not in timestamp order: newest={pos_newest}, older={pos_older}, oldest={pos_oldest}"

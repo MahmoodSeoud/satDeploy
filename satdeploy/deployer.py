@@ -1,12 +1,10 @@
 """Deployment logic for satdeploy."""
 
 import hashlib
-from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from satdeploy.services import ServiceManager
     from satdeploy.ssh import SSHClient
 
 
@@ -32,18 +30,6 @@ def parse_backup_version(version: str) -> dict:
         timestamp = version
 
     return {"timestamp": timestamp, "hash": binary_hash}
-
-
-@dataclass
-class DeployResult:
-    """Result of a deployment operation."""
-
-    success: bool
-    app_name: str
-    binary_hash: Optional[str] = None
-    backup_path: Optional[str] = None
-    health_check_passed: Optional[bool] = None
-    error_message: Optional[str] = None
 
 
 class Deployer:
@@ -161,129 +147,3 @@ class Deployer:
 
         self._ssh.upload(local_path, remote_path)
         self._ssh.run(f"chmod +x '{remote_path}'")
-
-    def push(
-        self,
-        app_name: str,
-        local_path: str,
-        remote_path: str,
-        service: Optional[str],
-        service_manager: "ServiceManager",
-    ) -> DeployResult:
-        """Push a binary to the target.
-
-        This performs the full deployment workflow:
-        1. Compute hash of local binary
-        2. Backup current remote binary
-        3. Stop service (if applicable)
-        4. Deploy new binary
-        5. Start service (if applicable)
-        6. Health check (if applicable)
-
-        Args:
-            app_name: The application name.
-            local_path: Path to the local binary.
-            remote_path: Path on the remote host.
-            service: The systemd service name, or None for libraries.
-            service_manager: The service manager instance.
-
-        Returns:
-            DeployResult with success status and metadata.
-        """
-        try:
-            binary_hash = self.compute_hash(local_path)
-            backup_path = self.backup(app_name, remote_path)
-
-            if service:
-                service_manager.stop(service)
-
-            self.deploy(local_path, remote_path)
-
-            health_check_passed = None
-            if service:
-                service_manager.start(service)
-                health_check_passed = service_manager.is_healthy(service)
-
-            return DeployResult(
-                success=True,
-                app_name=app_name,
-                binary_hash=binary_hash,
-                backup_path=backup_path,
-                health_check_passed=health_check_passed,
-            )
-
-        except Exception as e:
-            return DeployResult(
-                success=False,
-                app_name=app_name,
-                error_message=str(e),
-            )
-
-    def rollback(
-        self,
-        app_name: str,
-        remote_path: str,
-        service: Optional[str],
-        service_manager: "ServiceManager",
-        version: Optional[str] = None,
-    ) -> DeployResult:
-        """Rollback to a previous version.
-
-        Args:
-            app_name: The application name.
-            remote_path: Path on the remote host.
-            service: The systemd service name, or None for libraries.
-            service_manager: The service manager instance.
-            version: Specific version to restore, or None for most recent.
-
-        Returns:
-            DeployResult with success status and metadata.
-        """
-        try:
-            backups = self.list_backups(app_name)
-
-            if not backups:
-                return DeployResult(
-                    success=False,
-                    app_name=app_name,
-                    error_message="No backups available for rollback",
-                )
-
-            if version:
-                matching = [b for b in backups if b["version"] == version]
-                if not matching:
-                    return DeployResult(
-                        success=False,
-                        app_name=app_name,
-                        error_message=f"Version {version} not found",
-                    )
-                backup = matching[0]
-            else:
-                backup = backups[0]
-
-            backup_path = backup["path"]
-
-            if service:
-                service_manager.stop(service)
-
-            self._ssh.run(f"cp '{backup_path}' '{remote_path}'")
-            self._ssh.run(f"chmod +x '{remote_path}'")
-
-            health_check_passed = None
-            if service:
-                service_manager.start(service)
-                health_check_passed = service_manager.is_healthy(service)
-
-            return DeployResult(
-                success=True,
-                app_name=app_name,
-                backup_path=backup_path,
-                health_check_passed=health_check_passed,
-            )
-
-        except Exception as e:
-            return DeployResult(
-                success=False,
-                app_name=app_name,
-                error_message=str(e),
-            )

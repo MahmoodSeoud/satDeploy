@@ -92,7 +92,7 @@ class TestRollbackCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n20240114-091500.bak\n",
+            stdout="20240115-143022-abc12345.bak\n20240114-091500-def67890.bak\n",
             exit_code=0,
         )
 
@@ -133,13 +133,13 @@ class TestRollbackCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n20240114-091500.bak\n",
+            stdout="20240115-143022-abc12345.bak\n20240114-091500-def67890.bak\n",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "20240114-091500", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "20240114-091500-def67890", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -209,7 +209,7 @@ class TestRollbackCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
@@ -248,7 +248,7 @@ class TestRollbackCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
@@ -297,7 +297,7 @@ class TestRollbackWithDependencies:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
@@ -343,7 +343,7 @@ class TestRollbackHistoryLogging:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
@@ -392,7 +392,7 @@ class TestRollbackHistoryLogging:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
@@ -485,7 +485,7 @@ class TestRollbackHistoryLogging:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         # First call returns backups, second call fails
         mock_ssh.run.side_effect = [
-            Mock(stdout="20240115-143022.bak\n", exit_code=0),
+            Mock(stdout="20240115-143022-abc12345.bak\n", exit_code=0),
             SSHError("Permission denied"),
         ]
 
@@ -533,7 +533,7 @@ class TestRollbackPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
@@ -574,7 +574,7 @@ class TestRollbackPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
@@ -743,8 +743,8 @@ class TestRollbackDialBehavior:
             ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
-        # Should fail because we're at the oldest version
-        assert result.exit_code != 0
+        # Should warn (not error) because we're at the oldest version
+        assert result.exit_code == 0
         assert "oldest" in result.output.lower()
 
     @patch("satdeploy.cli.SSHClient")
