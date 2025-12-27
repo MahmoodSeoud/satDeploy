@@ -240,7 +240,7 @@ def status(config_dir: Path | None):
         return
 
     # Print header
-    header = f"    {'APP':<16} {'STATUS':<14}\t{'HASH':<10} {'TIMESTAMP'}"
+    header = f"    {'APP':<16}\t{'STATUS':<14}\t{'HASH':<10}\t{'TIMESTAMP'}"
     click.echo(click.style(header, fg="bright_black"))
     click.echo(click.style("    " + "-" * 60, fg="bright_black"))
 
@@ -307,9 +307,9 @@ def status(config_dir: Path | None):
                 timestamp_col = timestamp_display
 
                 click.echo(
-                    f"  {symbol} {name_col}"
+                    f"  {symbol} {name_col}\t"
                     f"{click.style(status_col, fg=status_color)}\t"
-                    f"{click.style(hash_col, fg='white')}"
+                    f"{click.style(hash_col, fg='white')}\t"
                     f"{click.style(timestamp_col, fg='bright_black')}"
                 )
 
@@ -326,9 +326,12 @@ def status(config_dir: Path | None):
     help="Config directory (default: ~/.satdeploy)",
 )
 def list_backups(app: str, config_dir: Path | None):
-    """Show available backups for an app.
+    """List all versions of an app (deployed + backups).
 
-    APP is the name of the application to list backups for.
+    APP is the name of the application to list versions for.
+
+    Shows the currently deployed version at the top, followed by
+    all available backups that can be restored via rollback.
     """
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     config = Config(config_dir=config_dir)
@@ -349,7 +352,6 @@ def list_backups(app: str, config_dir: Path | None):
 
     # Get currently deployed version from history
     last_deploy = history.get_last_deployment(app)
-    current_backup_path = last_deploy.backup_path if last_deploy and last_deploy.success else None
 
     with SSHClient(host=target["host"], user=target["user"]) as ssh:
         deployer = Deployer(
@@ -361,31 +363,49 @@ def list_backups(app: str, config_dir: Path | None):
         try:
             backups = deployer.list_backups(app)
 
-            if not backups:
-                click.echo(f"No backups found for {app}.")
+            # Check if we have anything to show
+            has_deployed = last_deploy and last_deploy.success
+            has_backups = len(backups) > 0
+
+            if not has_deployed and not has_backups:
+                click.echo(f"No versions found for {app}.")
                 return
 
-            click.echo(click.style(f"Backups for {app}:", bold=True))
+            click.echo(click.style(f"Versions for {app}:", bold=True))
             click.echo("")
             # Print header
-            header = f"    {'HASH':<10} {'TIMESTAMP'}"
+            header = f"    {'HASH':<10}\t{'TIMESTAMP':<20}\t{'STATUS'}"
             click.echo(click.style(header, fg="bright_black"))
-            click.echo(click.style("    " + "-" * 30, fg="bright_black"))
+            click.echo(click.style("    " + "-" * 45, fg="bright_black"))
+
+            # Show currently deployed version first
+            if has_deployed:
+                hash_display = last_deploy.binary_hash or "-"
+                timestamp_display = "-"
+                if last_deploy.timestamp:
+                    from datetime import datetime
+                    try:
+                        dt = datetime.fromisoformat(last_deploy.timestamp)
+                        timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        timestamp_display = "-"
+
+                bullet = click.style(SYMBOLS["arrow"], fg="green")
+                hash_col = click.style(f"{hash_display:<10}", fg="green")
+                timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
+                status_col = click.style("deployed", fg="green")
+                click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
+
+            # Show backups
             for backup in backups:
-                # Check if this is the currently deployed version
-                is_current = current_backup_path and backup["version"] in current_backup_path
-
                 hash_display = backup.get("hash") or "-"
+                timestamp_display = backup.get("timestamp") or "-"
 
-                if is_current:
-                    bullet = click.style(SYMBOLS["arrow"], fg="green")
-                    hash_col = click.style(f"{hash_display:<10}", fg="green")
-                else:
-                    bullet = click.style(SYMBOLS["bullet"], fg="blue")
-                    hash_col = click.style(f"{hash_display:<10}", fg="blue")
-
-                timestamp = click.style(backup["timestamp"], fg="bright_black")
-                click.echo(f"  {bullet} {hash_col}{timestamp}")
+                bullet = click.style(SYMBOLS["bullet"], fg="blue")
+                hash_col = click.style(f"{hash_display:<10}", fg="blue")
+                timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
+                status_col = click.style("backup", fg="blue")
+                click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
 
         except SSHError as e:
             raise click.ClickException(str(e))

@@ -53,7 +53,7 @@ satdeploy logs controller
 | `satdeploy push <app>` | Deploy binary, backup old, restart services |
 | `satdeploy push <app> --local ./path` | Deploy with local path override |
 | `satdeploy status` | Show status of all apps and services |
-| `satdeploy list <app>` | Show available backups for an app |
+| `satdeploy list <app>` | List all versions (deployed + backups) |
 | `satdeploy rollback <app>` | Restore previous version |
 | `satdeploy rollback <app> <version>` | Restore specific version |
 | `satdeploy logs <app>` | Show journalctl logs for service |
@@ -142,13 +142,13 @@ Deploying controller...
 ▸ Deployed controller (e5f6a7b9)
 
 $ satdeploy list controller
-Backups for controller:
+Versions for controller:
 
-    HASH       TIMESTAMP
-    ------------------------------
-  → e5f6a7b9  2024-01-15 14:35:10
-  • a3f2c9b8  2024-01-15 14:30:22
-  • d2c3b4a5  2024-01-14 09:15:00
+    HASH       TIMESTAMP            STATUS
+    ---------------------------------------------
+  → e5f6a7b9  2024-01-15 14:35:10  deployed
+  • a3f2c9b8  2024-01-15 14:30:22  backup
+  • d2c3b4a5  2024-01-14 09:15:00  backup
 
 $ satdeploy logs controller -n 5
 Logs for controller (controller.service):

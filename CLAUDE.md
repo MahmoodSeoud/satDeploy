@@ -33,7 +33,7 @@ python -m pytest -v
 satdeploy init                     # Interactive setup
 satdeploy push <app>               # Deploy binary
 satdeploy status                   # Show service states
-satdeploy list <app>               # Show backups
+satdeploy list <app>               # List all versions (deployed + backups)
 satdeploy rollback <app>           # Restore previous version
 satdeploy logs <app>               # Show journalctl logs
 ```
