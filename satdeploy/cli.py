@@ -10,7 +10,7 @@ from satdeploy.config import DEFAULT_CONFIG_DIR, Config
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
 from satdeploy.history import DeploymentRecord, History
-from satdeploy.output import success, warning, step, SYMBOLS, SatDeployError
+from satdeploy.output import success, warning, step, SYMBOLS, SatDeployError, ColoredGroup
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 
@@ -155,7 +155,7 @@ def restore_backup(ssh: SSHClient, backup_path: str, remote_path: str) -> None:
     ssh.run(f"chmod +x '{remote_path}'")
 
 
-@click.group()
+@click.group(cls=ColoredGroup)
 def main():
     """Deploy binaries to embedded Linux targets."""
     pass
