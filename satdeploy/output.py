@@ -15,19 +15,9 @@ def success(message: str) -> str:
     return click.style(f"{SYMBOLS['check']} {message}", fg="green")
 
 
-def error(message: str) -> str:
-    """Format an error message with red color and cross."""
-    return click.style(f"{SYMBOLS['cross']} {message}", fg="red")
-
-
 def warning(message: str) -> str:
     """Format a warning message with yellow color."""
     return click.style(message, fg="yellow")
-
-
-def info(message: str) -> str:
-    """Format an info message."""
-    return message
 
 
 def step(current: int, total: int, message: str) -> str:

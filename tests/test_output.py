@@ -4,9 +4,7 @@ import click
 
 from satdeploy.output import (
     success,
-    error,
     warning,
-    info,
     step,
     SYMBOLS,
 )
@@ -41,18 +39,9 @@ class TestMessageFormatters:
         # The result should contain ANSI color codes for green
         assert "\x1b[" in result or result == "▸ Done"
 
-    def test_error_returns_red_with_cross(self):
-        result = error("Failed")
-        assert "✗" in result
-        assert "\x1b[" in result or result == "✗ Failed"
-
     def test_warning_returns_yellow(self):
         result = warning("Caution")
         assert "\x1b[" in result or "Caution" in result
-
-    def test_info_returns_plain_message(self):
-        result = info("Information")
-        assert "Information" in result
 
 
 class TestStepFormatter:
