@@ -527,7 +527,7 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             if not backups:
                 raise click.ClickException("No backups available for rollback")
 
-            # Get currently deployed hash to filter it out
+            # Get currently deployed hash to find position in version history
             last_deploy = history.get_last_deployment(app)
             current_hash = last_deploy.binary_hash if last_deploy and last_deploy.success else None
 
