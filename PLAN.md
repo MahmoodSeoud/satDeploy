@@ -268,7 +268,7 @@ $ satdeploy rollback controller
 - [x] Error handling, edge cases
 
 ### Week 4
-- [ ] Polish CLI output
-- [ ] README, documentation
-- [ ] Test on real flatsat
+- [x] Polish CLI output
+- [x] README, documentation
+- [x] Test on real flatsat
 

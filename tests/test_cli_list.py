@@ -308,9 +308,9 @@ class TestListPolishedOutput:
         mock_ssh = MagicMock()
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        # Return backups including the current one
+        # Return backups including the current one (with hash in filename)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n20240114-091500.bak\n",
+            stdout="20240115-143022-a3f2c9b1.bak\n20240114-091500-b7e1d2a4.bak\n",
             exit_code=0,
         )
 

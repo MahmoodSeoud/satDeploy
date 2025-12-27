@@ -1,6 +1,7 @@
 """CLI entry point for satdeploy."""
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -19,6 +20,95 @@ def get_history(config_dir: Path) -> History:
     history = History(config_dir / "history.db")
     history.init_db()
     return history
+
+
+def format_iso_timestamp(iso_str: str | None) -> str:
+    """Format an ISO timestamp string to human-readable format.
+
+    Args:
+        iso_str: ISO format timestamp (e.g., "2024-01-15T14:30:22")
+
+    Returns:
+        Formatted string like "2024-01-15 14:30:22" or "-" if invalid.
+    """
+    if not iso_str:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return "-"
+
+
+def get_services_to_manage(
+    config: Config,
+    app: str,
+    service: str | None,
+) -> list[tuple[str, str]]:
+    """Get list of services to stop/start for an app deployment.
+
+    For apps with a restart list (libraries), returns those services.
+    For apps with dependencies, returns the dependency chain.
+    For standalone apps, returns just that app's service.
+
+    Args:
+        config: The loaded configuration.
+        app: The app being deployed/rolled back.
+        service: The app's service name (None for libraries).
+
+    Returns:
+        List of (app_name, service_name) tuples in stop order.
+
+    Raises:
+        click.ClickException: If cyclic dependencies are detected.
+    """
+    resolver = DependencyResolver(config.apps)
+
+    if resolver.has_cycle():
+        raise click.ClickException("Cyclic dependency detected in config")
+
+    # For libraries with restart list, use that
+    restart_apps = resolver.get_restart_apps(app)
+    if restart_apps:
+        services = []
+        for restart_app in restart_apps:
+            restart_config = config.get_app(restart_app)
+            if restart_config and restart_config.get("service"):
+                services.append((restart_app, restart_config.get("service")))
+        return services
+
+    # For services with dependencies, get the full stop order
+    if service:
+        stop_order = resolver.get_stop_order(app)
+        services = []
+        for dep_app in stop_order:
+            dep_config = config.get_app(dep_app)
+            if dep_config and dep_config.get("service"):
+                services.append((dep_app, dep_config.get("service")))
+        return services
+
+    return []
+
+
+def get_app_config_or_error(config: Config, app: str) -> dict:
+    """Get app configuration or raise ClickException if not found.
+
+    Args:
+        config: The loaded configuration.
+        app: The app name to look up.
+
+    Returns:
+        The app configuration dict.
+
+    Raises:
+        click.ClickException: If the app is not found in config.
+    """
+    app_config = config.get_app(app)
+    if app_config is None:
+        raise click.ClickException(
+            f"App '{app}' not found in config. Check your config.yaml."
+        )
+    return app_config
 
 
 @click.group()
@@ -119,38 +209,9 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 max_backups=config.max_backups,
             )
 
-            # Resolve dependencies
-            resolver = DependencyResolver(config.apps)
+            services_to_manage = get_services_to_manage(config, app, service)
 
-            # Check for cycles
-            if resolver.has_cycle():
-                raise click.ClickException("Cyclic dependency detected in config")
-
-            # For libraries with restart list, use that
-            restart_apps = resolver.get_restart_apps(app)
-            if restart_apps:
-                # Library with restart list
-                services_to_manage = []
-                for restart_app in restart_apps:
-                    restart_config = config.get_app(restart_app)
-                    if restart_config and restart_config.get("service"):
-                        services_to_manage.append(
-                            (restart_app, restart_config.get("service"))
-                        )
-            elif service:
-                # Service with dependencies
-                stop_order = resolver.get_stop_order(app)
-                services_to_manage = []
-                for dep_app in stop_order:
-                    dep_config = config.get_app(dep_app)
-                    if dep_config and dep_config.get("service"):
-                        services_to_manage.append(
-                            (dep_app, dep_config.get("service"))
-                        )
-            else:
-                services_to_manage = []
-
-            # Calculate total steps: backup + deploy + stop services + start services + health checks
+            # Calculate total steps: backup + deploy + stop services + start services
             num_services = len(services_to_manage)
             total_steps = 2 + num_services * 2  # backup, deploy, stop each, start each
             current_step = 0
@@ -261,15 +322,8 @@ def status(config_dir: Path | None):
                 if deployed:
                     last_deploy = history.get_last_deployment(app_name)
                     if last_deploy and last_deploy.success:
-                        # Use binary_hash and timestamp directly from history record
                         hash_display = last_deploy.binary_hash or "-"
-                        if last_deploy.timestamp:
-                            from datetime import datetime
-                            try:
-                                dt = datetime.fromisoformat(last_deploy.timestamp)
-                                timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
-                            except ValueError:
-                                timestamp_display = "-"
+                        timestamp_display = format_iso_timestamp(last_deploy.timestamp)
 
                 if not deployed:
                     symbol = click.style(SYMBOLS["bullet"], fg="yellow")
@@ -363,11 +417,31 @@ def list_backups(app: str, config_dir: Path | None):
         try:
             backups = deployer.list_backups(app)
 
-            # Check if we have anything to show
-            has_deployed = last_deploy and last_deploy.success
-            has_backups = len(backups) > 0
+            # Get currently deployed hash
+            current_hash = None
+            if last_deploy and last_deploy.success:
+                current_hash = last_deploy.binary_hash
 
-            if not has_deployed and not has_backups:
+            # Deduplicate backups by hash, keeping most recent (first in list)
+            seen_keys = {}
+            for backup in backups:
+                # Use hash if available, otherwise use version string
+                key = backup.get("hash") or backup.get("version")
+                if key and key not in seen_keys:
+                    seen_keys[key] = backup
+
+            # Add currently deployed version if not in backups (e.g., after first push)
+            if current_hash and current_hash not in seen_keys:
+                timestamp_display = format_iso_timestamp(last_deploy.timestamp)
+                seen_keys[current_hash] = {
+                    "hash": current_hash,
+                    "timestamp": timestamp_display,
+                }
+
+            # Build unified list of unique versions
+            versions = list(seen_keys.values())
+
+            if not versions:
                 click.echo(f"No versions found for {app}.")
                 return
 
@@ -378,33 +452,22 @@ def list_backups(app: str, config_dir: Path | None):
             click.echo(click.style(header, fg="bright_black"))
             click.echo(click.style("    " + "-" * 45, fg="bright_black"))
 
-            # Show currently deployed version first
-            if has_deployed:
-                hash_display = last_deploy.binary_hash or "-"
-                timestamp_display = "-"
-                if last_deploy.timestamp:
-                    from datetime import datetime
-                    try:
-                        dt = datetime.fromisoformat(last_deploy.timestamp)
-                        timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
-                    except ValueError:
-                        timestamp_display = "-"
+            # Show all versions, arrow on deployed one
+            for version in versions:
+                hash_display = version.get("hash") or "-"
+                timestamp_display = version.get("timestamp") or "-"
+                is_deployed = hash_display == current_hash
 
-                bullet = click.style(SYMBOLS["arrow"], fg="green")
-                hash_col = click.style(f"{hash_display:<10}", fg="green")
+                if is_deployed:
+                    bullet = click.style(SYMBOLS["arrow"], fg="green")
+                    hash_col = click.style(f"{hash_display:<10}", fg="green")
+                    status_col = click.style("deployed", fg="green")
+                else:
+                    bullet = click.style(SYMBOLS["bullet"], fg="blue")
+                    hash_col = click.style(f"{hash_display:<10}", fg="blue")
+                    status_col = click.style("backup", fg="blue")
+
                 timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
-                status_col = click.style("deployed", fg="green")
-                click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
-
-            # Show backups
-            for backup in backups:
-                hash_display = backup.get("hash") or "-"
-                timestamp_display = backup.get("timestamp") or "-"
-
-                bullet = click.style(SYMBOLS["bullet"], fg="blue")
-                hash_col = click.style(f"{hash_display:<10}", fg="blue")
-                timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
-                status_col = click.style("backup", fg="blue")
                 click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
 
         except SSHError as e:
@@ -457,40 +520,43 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                 max_backups=config.max_backups,
             )
 
-            # Resolve dependencies
-            resolver = DependencyResolver(config.apps)
+            services_to_manage = get_services_to_manage(config, app, service)
 
-            # Check for cycles
-            if resolver.has_cycle():
-                raise click.ClickException("Cyclic dependency detected in config")
+            # Get backup list and find the right one
+            backups = deployer.list_backups(app)
+            if not backups:
+                raise click.ClickException("No backups available for rollback")
 
-            # For libraries with restart list, use that
-            restart_apps = resolver.get_restart_apps(app)
-            if restart_apps:
-                # Library with restart list
-                services_to_manage = []
-                for restart_app in restart_apps:
-                    restart_config = config.get_app(restart_app)
-                    if restart_config and restart_config.get("service"):
-                        services_to_manage.append(
-                            (restart_app, restart_config.get("service"))
-                        )
-            elif service:
-                # Service with dependencies
-                stop_order = resolver.get_stop_order(app)
-                services_to_manage = []
-                for dep_app in stop_order:
-                    dep_config = config.get_app(dep_app)
-                    if dep_config and dep_config.get("service"):
-                        services_to_manage.append(
-                            (dep_app, dep_config.get("service"))
-                        )
+            # Get currently deployed hash to filter it out
+            last_deploy = history.get_last_deployment(app)
+            current_hash = last_deploy.binary_hash if last_deploy and last_deploy.success else None
+
+            if version:
+                matching = [b for b in backups if b["version"] == version]
+                if not matching:
+                    raise click.ClickException(f"Version {version} not found")
+                backup = matching[0]
+            elif current_hash:
+                # Filter out the currently deployed version
+                available = [b for b in backups if b.get("hash") != current_hash]
+                if not available:
+                    raise click.ClickException("No different backup available for rollback")
+                backup = available[0]
             else:
-                services_to_manage = []
+                # No history, just use the most recent backup
+                backup = backups[0]
 
-            # Calculate total steps: restore + stop services + start services
+            backup_path = backup["path"]
+            backup_hash = backup.get("hash") or "-"
+            backup_timestamp = backup.get("timestamp") or "-"
+
+            # Check if current version needs to be backed up (not already in backups)
+            backup_hashes = {b.get("hash") for b in backups if b.get("hash")}
+            needs_backup = current_hash and current_hash not in backup_hashes
+
+            # Calculate total steps
             num_services = len(services_to_manage)
-            total_steps = 1 + num_services * 2  # restore, stop each, start each
+            total_steps = (1 if needs_backup else 0) + 1 + num_services * 2
             current_step = 0
 
             click.echo(f"Rolling back {app}...")
@@ -501,22 +567,12 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                 click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
                 service_manager.stop(svc_name)
 
-            # Get backup list and find the right one
-            backups = deployer.list_backups(app)
-            if not backups:
-                raise click.ClickException("No backups available for rollback")
-
-            if version:
-                matching = [b for b in backups if b["version"] == version]
-                if not matching:
-                    raise click.ClickException(f"Version {version} not found")
-                backup = matching[0]
-            else:
-                backup = backups[0]
-
-            backup_path = backup["path"]
-            backup_hash = backup.get("hash") or "-"
-            backup_timestamp = backup.get("timestamp") or "-"
+            # Backup current version only if not already in backups
+            if needs_backup:
+                remote_target = f"{target['user']}@{target['host']}:{remote_path}"
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
+                deployer.backup(app, remote_path)
 
             # Restore the backup
             current_step += 1
