@@ -554,19 +554,20 @@ def list_backups(app: str, config_dir: Path | None):
 
 @main.command()
 @click.argument("app")
-@click.argument("version", required=False, default=None)
+@click.argument("hash", required=False, default=None)
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def rollback(app: str, version: str | None, config_dir: Path | None):
+def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
     """Rollback to a previous version.
 
     APP is the name of the application to rollback.
-    VERSION is the optional backup version to restore (defaults to latest).
+    HASH is the optional backup hash to restore (defaults to previous version).
     """
+    target_hash = hash  # Rename to avoid shadowing builtin
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     config = Config(config_dir=config_dir)
 
@@ -619,15 +620,11 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             last_deploy = history.get_last_deployment(app)
             current_hash = last_deploy.binary_hash if last_deploy and last_deploy.success else None
 
-            if version:
-                # For explicit version, search raw backups (allow selecting specific backup)
-                # First try matching by full version string
-                matching = [b for b in raw_backups if b["version"] == version]
-                # If no match, try matching by hash prefix
+            if target_hash:
+                # Match by hash prefix
+                matching = [b for b in raw_backups if b.get("hash") == target_hash]
                 if not matching:
-                    matching = [b for b in raw_backups if b.get("hash") == version]
-                if not matching:
-                    raise click.ClickException(f"Version {version} not found")
+                    raise click.ClickException(f"Hash {target_hash} not found")
                 backup = matching[0]
             elif current_hash:
                 # Dial behavior: find current position and go to next older version

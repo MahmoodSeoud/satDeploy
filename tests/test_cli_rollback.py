@@ -107,8 +107,8 @@ class TestRollbackCommand:
         assert "2024-01-15 14:30:22" in result.output
 
     @patch("satdeploy.cli.SSHClient")
-    def test_rollback_accepts_version_argument(self, mock_ssh_class, tmp_path):
-        """Rollback should accept optional version argument."""
+    def test_rollback_accepts_hash_argument(self, mock_ssh_class, tmp_path):
+        """Rollback should accept optional hash argument."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
@@ -139,11 +139,11 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "20240114-091500-def67890", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "def67890", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
-        # Should show formatted timestamp for the specific version
+        # Should show formatted timestamp for the specific hash
         assert "2024-01-14 09:15:00" in result.output
 
     @patch("satdeploy.cli.SSHClient")
@@ -183,8 +183,8 @@ class TestRollbackCommand:
         assert "no backup" in result.output.lower()
 
     @patch("satdeploy.cli.SSHClient")
-    def test_rollback_fails_when_version_not_found(self, mock_ssh_class, tmp_path):
-        """Rollback should fail if specified version doesn't exist."""
+    def test_rollback_fails_when_hash_not_found(self, mock_ssh_class, tmp_path):
+        """Rollback should fail if specified hash doesn't exist."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
@@ -215,7 +215,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "20240101-000000", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "zzzzzzzz", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -748,8 +748,8 @@ class TestRollbackDialBehavior:
         assert "oldest" in result.output.lower()
 
     @patch("satdeploy.cli.SSHClient")
-    def test_rollback_explicit_version_ignores_dial(self, mock_ssh_class, tmp_path):
-        """Explicit version argument should work regardless of dial position."""
+    def test_rollback_explicit_hash_ignores_dial(self, mock_ssh_class, tmp_path):
+        """Explicit hash argument should work regardless of dial position."""
         from satdeploy.history import History, DeploymentRecord
 
         runner = CliRunner()
@@ -791,10 +791,10 @@ class TestRollbackDialBehavior:
             exit_code=0,
         )
 
-        # Explicitly request C even though we're at A (oldest)
+        # Explicitly request C by hash even though we're at A (oldest)
         result = runner.invoke(
             main,
-            ["rollback", "controller", "20240117-120000-cccccccc", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "cccccccc", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0

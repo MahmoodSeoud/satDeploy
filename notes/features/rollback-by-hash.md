@@ -1,23 +1,17 @@
 # Feature: Rollback by Hash
 
 ## Summary
-Allow `satdeploy rollback <app> <hash>` to rollback by specifying just the 8-character hash prefix instead of the full version string.
+Allow `satdeploy rollback <app> <hash>` to rollback by specifying the 8-character hash prefix.
 
-## Current Behavior
+## Final Behavior
 - `satdeploy rollback controller` - dial behavior, goes to next older version
-- `satdeploy rollback controller 20240114-091500-def67890` - matches full version string
+- `satdeploy rollback controller def67890` - rollback to specific hash
 
-## Desired Behavior
-- Support rollback by hash: `satdeploy rollback controller def67890`
-- Should find the backup with matching hash prefix
-- Error if hash not found or ambiguous
-
-## Implementation Notes
-- Version arg lookup in cli.py lines 622-627 searches `raw_backups` by `b["version"]`
-- Need to add fallback search by `b.get("hash")` when version string doesn't match
-- Hash is 8 characters, version string is longer (timestamp-hash format)
+## Implementation
+- CLI argument renamed from `version` to `hash`
+- Only matches by hash prefix (full version string no longer supported)
+- Error message: "Hash {hash} not found"
 
 ## Test Cases
 1. Rollback by valid hash prefix finds correct backup
 2. Rollback by unknown hash fails with "not found" error
-3. Full version string still works (backward compat)

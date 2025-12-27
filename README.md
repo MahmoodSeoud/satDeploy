@@ -55,7 +55,7 @@ satdeploy logs controller
 | `satdeploy status` | Show status of all apps and services |
 | `satdeploy list <app>` | List all versions (deployed + backups) |
 | `satdeploy rollback <app>` | Restore previous version |
-| `satdeploy rollback <app> <version>` | Restore specific version |
+| `satdeploy rollback <app> <hash>` | Restore specific version by hash |
 | `satdeploy logs <app>` | Show journalctl logs for service |
 | `satdeploy logs <app> -n 50` | Show last 50 lines of logs |
 
