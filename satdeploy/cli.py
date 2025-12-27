@@ -527,7 +527,7 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             if not backups:
                 raise click.ClickException("No backups available for rollback")
 
-            # Get currently deployed hash to filter it out
+            # Get currently deployed hash to find position in version history
             last_deploy = history.get_last_deployment(app)
             current_hash = last_deploy.binary_hash if last_deploy and last_deploy.success else None
 
@@ -537,11 +537,25 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                     raise click.ClickException(f"Version {version} not found")
                 backup = matching[0]
             elif current_hash:
-                # Filter out the currently deployed version
-                available = [b for b in backups if b.get("hash") != current_hash]
-                if not available:
-                    raise click.ClickException("No different backup available for rollback")
-                backup = available[0]
+                # Dial behavior: find current position and go to next older version
+                # Backups are sorted newest-first, so "next older" means index + 1
+                current_index = None
+                for i, b in enumerate(backups):
+                    if b.get("hash") == current_hash:
+                        current_index = i
+                        break
+
+                if current_index is not None:
+                    # Current version is in backups, go to next older
+                    next_index = current_index + 1
+                    if next_index >= len(backups):
+                        raise click.ClickException(
+                            "Already at oldest version. No older backup available."
+                        )
+                    backup = backups[next_index]
+                else:
+                    # Current version not in backups (fresh deploy), go to most recent
+                    backup = backups[0]
             else:
                 # No history, just use the most recent backup
                 backup = backups[0]

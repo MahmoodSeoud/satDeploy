@@ -629,3 +629,173 @@ class TestRollbackPolishedOutput:
         assert "2024-01-15 14:30:22" in result.output
         # Should NOT show the raw version string format
         assert "20240115-143022-abc12345" not in result.output
+
+
+class TestRollbackDialBehavior:
+    """Tests for rollback dial behavior - each rollback goes one step back."""
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_rollback_goes_to_next_older_version_not_newest(self, mock_ssh_class, tmp_path):
+        """Rollback should go to next older version, not ping-pong to newest.
+
+        Given backups [C, B, A] (newest first) and B is currently deployed,
+        rollback should go to A (older than B), NOT C (newer than B).
+        """
+        from satdeploy.history import History, DeploymentRecord
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        # Set up history: B is currently deployed
+        history = History(config_dir / "history.db")
+        history.init_db()
+        history.record(DeploymentRecord(
+            app="controller",
+            binary_hash="bbbbbbbb",
+            remote_path="/opt/disco/bin/controller",
+            action="rollback",
+            success=True,
+        ))
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        # Backups: C (newest), B (current), A (oldest)
+        mock_ssh.run.return_value = Mock(
+            stdout="20240117-120000-cccccccc.bak\n20240116-120000-bbbbbbbb.bak\n20240115-120000-aaaaaaaa.bak\n",
+            exit_code=0,
+        )
+
+        result = runner.invoke(
+            main,
+            ["rollback", "controller", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+        # Should rollback to A (next older than B), NOT C (newer than B)
+        assert "aaaaaaaa" in result.output
+        assert "cccccccc" not in result.output or "Rolled back" not in result.output.split("cccccccc")[0]
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_rollback_stops_at_oldest_version(self, mock_ssh_class, tmp_path):
+        """Rollback should error when already at oldest version, not wrap."""
+        from satdeploy.history import History, DeploymentRecord
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        # Set up history: A (oldest) is currently deployed
+        history = History(config_dir / "history.db")
+        history.init_db()
+        history.record(DeploymentRecord(
+            app="controller",
+            binary_hash="aaaaaaaa",
+            remote_path="/opt/disco/bin/controller",
+            action="rollback",
+            success=True,
+        ))
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        # Backups: C (newest), B, A (oldest/current)
+        mock_ssh.run.return_value = Mock(
+            stdout="20240117-120000-cccccccc.bak\n20240116-120000-bbbbbbbb.bak\n20240115-120000-aaaaaaaa.bak\n",
+            exit_code=0,
+        )
+
+        result = runner.invoke(
+            main,
+            ["rollback", "controller", "--config-dir", str(config_dir)],
+        )
+
+        # Should fail because we're at the oldest version
+        assert result.exit_code != 0
+        assert "oldest" in result.output.lower()
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_rollback_explicit_version_ignores_dial(self, mock_ssh_class, tmp_path):
+        """Explicit version argument should work regardless of dial position."""
+        from satdeploy.history import History, DeploymentRecord
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        # Set up history: A (oldest) is currently deployed
+        history = History(config_dir / "history.db")
+        history.init_db()
+        history.record(DeploymentRecord(
+            app="controller",
+            binary_hash="aaaaaaaa",
+            remote_path="/opt/disco/bin/controller",
+            action="rollback",
+            success=True,
+        ))
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.run.return_value = Mock(
+            stdout="20240117-120000-cccccccc.bak\n20240116-120000-bbbbbbbb.bak\n20240115-120000-aaaaaaaa.bak\n",
+            exit_code=0,
+        )
+
+        # Explicitly request C even though we're at A (oldest)
+        result = runner.invoke(
+            main,
+            ["rollback", "controller", "20240117-120000-cccccccc", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+        assert "cccccccc" in result.output
