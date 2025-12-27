@@ -10,7 +10,7 @@ from satdeploy.config import DEFAULT_CONFIG_DIR, Config
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
 from satdeploy.history import DeploymentRecord, History
-from satdeploy.output import success, error, warning, info, step, SYMBOLS
+from satdeploy.output import success, warning, step, SYMBOLS
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 
@@ -111,6 +111,50 @@ def get_app_config_or_error(config: Config, app: str) -> dict:
     return app_config
 
 
+class StepCounter:
+    """Simple counter for step-by-step progress output."""
+
+    def __init__(self, total: int):
+        self.current = 0
+        self.total = total
+
+    def next(self, message: str) -> None:
+        self.current += 1
+        click.echo(step(self.current, self.total, message))
+
+
+def stop_services(
+    service_manager: ServiceManager,
+    services: list[tuple[str, str]],
+    counter: StepCounter,
+) -> None:
+    """Stop services in order with progress output."""
+    for svc_app, svc_name in services:
+        counter.next(f"Stopping {svc_app} ({svc_name})")
+        service_manager.stop(svc_name)
+
+
+def start_services(
+    service_manager: ServiceManager,
+    services: list[tuple[str, str]],
+    counter: StepCounter,
+) -> None:
+    """Start services in reverse order with health checks."""
+    for svc_app, svc_name in reversed(services):
+        counter.next(f"Starting {svc_app} ({svc_name})")
+        service_manager.start(svc_name)
+        if service_manager.is_healthy(svc_name):
+            click.echo(success(f"Health check passed for {svc_app}"))
+        else:
+            click.echo(warning(f"Health check failed for {svc_app}"))
+
+
+def restore_backup(ssh: SSHClient, backup_path: str, remote_path: str) -> None:
+    """Restore a backup file to the remote path."""
+    ssh.run(f"cp '{backup_path}' '{remote_path}'")
+    ssh.run(f"chmod +x '{remote_path}'")
+
+
 @click.group()
 def main():
     """Deploy binaries to embedded Linux targets."""
@@ -181,11 +225,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    app_config = config.get_app(app)
-    if app_config is None:
-        raise click.ClickException(
-            f"App '{app}' not found in config. Check your config.yaml."
-        )
+    app_config = get_app_config_or_error(config, app)
 
     local_path = os.path.expanduser(local or app_config.get("local"))
     remote_path = app_config.get("remote")
@@ -239,40 +279,22 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 backup = existing_hashes[local_hash]
                 backup_path = backup["path"]
 
-                # Still need to backup current remote if not in backups
                 total_steps = (1 if remote_needs_backup else 0) + 1 + len(services_to_manage) * 2
-                current_step = 0
+                counter = StepCounter(total_steps)
 
                 click.echo(f"Restoring {app} from backup...")
 
-                # Stop services
-                for svc_app, svc_name in services_to_manage:
-                    current_step += 1
-                    click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
-                    service_manager.stop(svc_name)
+                stop_services(service_manager, services_to_manage, counter)
 
-                # Backup current if needed
                 if remote_needs_backup:
                     remote_target = f"{target['user']}@{target['host']}:{remote_path}"
-                    current_step += 1
-                    click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
+                    counter.next(f"Backing up {remote_target}")
                     deployer.backup(app, remote_path)
 
-                # Restore from backup
-                current_step += 1
-                click.echo(step(current_step, total_steps, f"Restoring {local_hash} from backup"))
-                ssh.run(f"cp '{backup_path}' '{remote_path}'")
-                ssh.run(f"chmod +x '{remote_path}'")
+                counter.next(f"Restoring {local_hash} from backup")
+                restore_backup(ssh, backup_path, remote_path)
 
-                # Start services
-                for svc_app, svc_name in reversed(services_to_manage):
-                    current_step += 1
-                    click.echo(step(current_step, total_steps, f"Starting {svc_app} ({svc_name})"))
-                    service_manager.start(svc_name)
-                    if service_manager.is_healthy(svc_name):
-                        click.echo(success(f"Health check passed for {svc_app}"))
-                    else:
-                        click.echo(warning(f"Health check failed for {svc_app}"))
+                start_services(service_manager, services_to_manage, counter)
 
                 history.record(DeploymentRecord(
                     app=app,
@@ -287,41 +309,25 @@ def push(app: str, local: str | None, config_dir: Path | None):
 
             # Fresh deploy - upload new binary
             total_steps = (1 if remote_needs_backup else 0) + 1 + len(services_to_manage) * 2
-            current_step = 0
+            counter = StepCounter(total_steps)
 
             click.echo(f"Deploying {app}...")
 
-            # Stop services in order
-            for svc_app, svc_name in services_to_manage:
-                current_step += 1
-                click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
-                service_manager.stop(svc_name)
+            stop_services(service_manager, services_to_manage, counter)
 
-            # Backup current version only if not already in backups
             remote_target = f"{target['user']}@{target['host']}:{remote_path}"
             backup_path = None
 
             if remote_needs_backup:
-                current_step += 1
-                click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
+                counter.next(f"Backing up {remote_target}")
                 backup_path = deployer.backup(app, remote_path)
 
-            current_step += 1
-            click.echo(step(current_step, total_steps, f"Uploading {local_path}"))
+            counter.next(f"Uploading {local_path}")
             click.echo(f"                {SYMBOLS['arrow']} {remote_target}")
             deployer.deploy(local_path, remote_path)
 
-            # Start services in reverse order
-            for svc_app, svc_name in reversed(services_to_manage):
-                current_step += 1
-                click.echo(step(current_step, total_steps, f"Starting {svc_app} ({svc_name})"))
-                service_manager.start(svc_name)
-                if service_manager.is_healthy(svc_name):
-                    click.echo(success(f"Health check passed for {svc_app}"))
-                else:
-                    click.echo(warning(f"Health check failed for {svc_app}"))
+            start_services(service_manager, services_to_manage, counter)
 
-            # Log successful deployment
             history.record(DeploymentRecord(
                 app=app,
                 binary_hash=local_hash,
@@ -469,11 +475,7 @@ def list_backups(app: str, config_dir: Path | None):
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    app_config = config.get_app(app)
-    if app_config is None:
-        raise click.ClickException(
-            f"App '{app}' not found in config. Check your config.yaml."
-        )
+    app_config = get_app_config_or_error(config, app)
 
     target = config.target
     history = get_history(config_dir)
@@ -573,11 +575,7 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    app_config = config.get_app(app)
-    if app_config is None:
-        raise click.ClickException(
-            f"App '{app}' not found in config. Check your config.yaml."
-        )
+    app_config = get_app_config_or_error(config, app)
 
     remote_path = app_config.get("remote")
     service = app_config.get("service")
@@ -658,41 +656,22 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             backup_hashes = {b.get("hash") for b in backups if b.get("hash")}
             needs_backup = current_hash and current_hash not in backup_hashes
 
-            # Calculate total steps
-            num_services = len(services_to_manage)
-            total_steps = (1 if needs_backup else 0) + 1 + num_services * 2
-            current_step = 0
+            total_steps = (1 if needs_backup else 0) + 1 + len(services_to_manage) * 2
+            counter = StepCounter(total_steps)
 
             click.echo(f"Rolling back {app}...")
 
-            # Stop services in order
-            for svc_app, svc_name in services_to_manage:
-                current_step += 1
-                click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
-                service_manager.stop(svc_name)
+            stop_services(service_manager, services_to_manage, counter)
 
-            # Backup current version only if not already in backups
             if needs_backup:
                 remote_target = f"{target['user']}@{target['host']}:{remote_path}"
-                current_step += 1
-                click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
+                counter.next(f"Backing up {remote_target}")
                 deployer.backup(app, remote_path)
 
-            # Restore the backup
-            current_step += 1
-            click.echo(step(current_step, total_steps, f"Restoring {backup_hash} ({backup_timestamp})"))
-            ssh.run(f"cp '{backup_path}' '{remote_path}'")
-            ssh.run(f"chmod +x '{remote_path}'")
+            counter.next(f"Restoring {backup_hash} ({backup_timestamp})")
+            restore_backup(ssh, backup_path, remote_path)
 
-            # Start services in reverse order
-            for svc_app, svc_name in reversed(services_to_manage):
-                current_step += 1
-                click.echo(step(current_step, total_steps, f"Starting {svc_app} ({svc_name})"))
-                service_manager.start(svc_name)
-                if service_manager.is_healthy(svc_name):
-                    click.echo(success(f"Health check passed for {svc_app}"))
-                else:
-                    click.echo(warning(f"Health check failed for {svc_app}"))
+            start_services(service_manager, services_to_manage, counter)
 
             # Log successful rollback
             history.record(DeploymentRecord(
@@ -748,11 +727,7 @@ def logs(app: str, lines: int, config_dir: Path | None):
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    app_config = config.get_app(app)
-    if app_config is None:
-        raise click.ClickException(
-            f"App '{app}' not found in config. Check your config.yaml."
-        )
+    app_config = get_app_config_or_error(config, app)
 
     service = app_config.get("service")
     if not service:
