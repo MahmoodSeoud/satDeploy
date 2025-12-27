@@ -51,6 +51,11 @@ class TestMessageFormatters:
         # The result should contain ANSI color codes for red
         assert "\x1b[" in result or result == "Failed"
 
+    def test_error_has_prefix(self):
+        result = error("Something went wrong")
+        assert "[ERROR]" in result
+        assert "Something went wrong" in result
+
 
 class TestStepFormatter:
     """Test step counter formatting."""
@@ -75,6 +80,11 @@ class TestSatDeployError:
         assert "Something went wrong" in formatted
         # Should contain ANSI red color codes
         assert "\x1b[" in formatted
+
+    def test_error_has_prefix(self):
+        err = SatDeployError("Something went wrong")
+        formatted = err.format_message()
+        assert "[ERROR]" in formatted
 
     def test_error_is_click_exception(self):
         err = SatDeployError("Test error")

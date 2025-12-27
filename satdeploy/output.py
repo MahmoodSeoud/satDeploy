@@ -21,8 +21,8 @@ def warning(message: str) -> str:
 
 
 def error(message: str) -> str:
-    """Format an error message with red color."""
-    return click.style(message, fg="red")
+    """Format an error message with red color and [ERROR] prefix."""
+    return click.style(f"[ERROR] {message}", fg="red")
 
 
 def step(current: int, total: int, message: str) -> str:
