@@ -1,6 +1,7 @@
 """CLI entry point for satdeploy."""
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -19,6 +20,24 @@ def get_history(config_dir: Path) -> History:
     history = History(config_dir / "history.db")
     history.init_db()
     return history
+
+
+def format_iso_timestamp(iso_str: str | None) -> str:
+    """Format an ISO timestamp string to human-readable format.
+
+    Args:
+        iso_str: ISO format timestamp (e.g., "2024-01-15T14:30:22")
+
+    Returns:
+        Formatted string like "2024-01-15 14:30:22" or "-" if invalid.
+    """
+    if not iso_str:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return "-"
 
 
 def get_services_to_manage(
@@ -282,15 +301,8 @@ def status(config_dir: Path | None):
                 if deployed:
                     last_deploy = history.get_last_deployment(app_name)
                     if last_deploy and last_deploy.success:
-                        # Use binary_hash and timestamp directly from history record
                         hash_display = last_deploy.binary_hash or "-"
-                        if last_deploy.timestamp:
-                            from datetime import datetime
-                            try:
-                                dt = datetime.fromisoformat(last_deploy.timestamp)
-                                timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
-                            except ValueError:
-                                timestamp_display = "-"
+                        timestamp_display = format_iso_timestamp(last_deploy.timestamp)
 
                 if not deployed:
                     symbol = click.style(SYMBOLS["bullet"], fg="yellow")
@@ -402,14 +414,7 @@ def list_backups(app: str, config_dir: Path | None):
             # Show currently deployed version first
             if has_deployed:
                 hash_display = last_deploy.binary_hash or "-"
-                timestamp_display = "-"
-                if last_deploy.timestamp:
-                    from datetime import datetime
-                    try:
-                        dt = datetime.fromisoformat(last_deploy.timestamp)
-                        timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
-                    except ValueError:
-                        timestamp_display = "-"
+                timestamp_display = format_iso_timestamp(last_deploy.timestamp)
 
                 bullet = click.style(SYMBOLS["arrow"], fg="green")
                 hash_col = click.style(f"{hash_display:<10}", fg="green")
