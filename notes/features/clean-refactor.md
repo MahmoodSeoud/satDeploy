@@ -7,6 +7,21 @@ Perform a clean refactor of the codebase following John Carmack's principles:
 - Remove unnecessary abstractions
 - Prefer local reasoning over global state
 
+## Changes Made
+
+### Refactoring
+1. **Extracted `get_services_to_manage()` helper** - Removed 28 lines of duplicated
+   code between push and rollback commands for dependency resolution
+2. **Extracted `format_iso_timestamp()` helper** - Removed duplicate inline imports
+   and try/except blocks for timestamp formatting
+3. **Moved datetime import to module level** - Cleaner imports
+
+### Bug Fix
+4. **Fixed rollback command** - Two bugs were discovered and fixed:
+   - Rollback now backs up the current version BEFORE restoring (like push does)
+   - Rollback now skips backups matching the currently deployed version
+   - This ensures versions are never lost and rollback cycles correctly
+
 ## Analysis of Current Code
 
 ### Identified Issues
