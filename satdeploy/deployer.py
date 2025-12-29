@@ -167,3 +167,14 @@ class Deployer:
         # Use heredoc to write content, avoiding shell escaping issues
         cmd = f"cat > '{remote_path}' << 'SATDEPLOY_EOF'\n{content}\nSATDEPLOY_EOF"
         self._ssh.run(cmd)
+
+    def upload_service(self, service_name: str, content: str) -> None:
+        """Upload service file and reload systemd.
+
+        Args:
+            service_name: Name of the service file (e.g. "my-app.service").
+            content: The service file content.
+        """
+        remote_path = f"/etc/systemd/system/{service_name}"
+        self.write_remote_file(remote_path, content)
+        self._ssh.run("systemctl daemon-reload")

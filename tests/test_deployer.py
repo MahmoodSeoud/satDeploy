@@ -328,3 +328,46 @@ class TestWriteRemoteFile:
         assert "/etc/systemd/system/test.service" in run_calls[0]
         # Verify the content is passed somehow (tee, cat heredoc, etc.)
         assert "Test Service" in run_calls[0]
+
+
+class TestUploadService:
+    """Test uploading service files with systemd reload."""
+
+    def test_upload_service_writes_file_and_reloads_systemd(self):
+        """Should write service file and reload systemd daemon."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+
+        content = "[Unit]\nDescription=Test Service\n[Service]\nExecStart=/usr/bin/test\n"
+        deployer.upload_service("test.service", content)
+
+        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
+        # Should write to /etc/systemd/system/
+        assert any("/etc/systemd/system/test.service" in call for call in run_calls)
+        # Should call systemctl daemon-reload
+        assert any("systemctl daemon-reload" in call for call in run_calls)
+
+    def test_upload_service_writes_content_correctly(self):
+        """Should write the service content to the correct path."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+
+        content = "[Unit]\nDescription=A53 Manager\n"
+        deployer.upload_service("a53-manager.service", content)
+
+        # First call should be the write_remote_file
+        first_call = str(mock_ssh.run.call_args_list[0])
+        assert "/etc/systemd/system/a53-manager.service" in first_call
+        assert "A53 Manager" in first_call
