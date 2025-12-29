@@ -69,10 +69,11 @@ class History:
         conn.execute(
             """
             INSERT INTO deployments
-            (app, timestamp, git_hash, binary_hash, remote_path, backup_path, action, success, error_message)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (module, app, timestamp, git_hash, binary_hash, remote_path, backup_path, action, success, error_message, service_hash, vmem_cleared)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                record.module,
                 record.app,
                 timestamp,
                 record.git_hash,
@@ -82,6 +83,8 @@ class History:
                 record.action,
                 1 if record.success else 0,
                 record.error_message,
+                record.service_hash,
+                1 if record.vmem_cleared else 0,
             ),
         )
         conn.commit()
@@ -152,6 +155,7 @@ class History:
         """Convert a database row to a DeploymentRecord."""
         return DeploymentRecord(
             id=row["id"],
+            module=row["module"],
             app=row["app"],
             timestamp=row["timestamp"],
             git_hash=row["git_hash"],
@@ -161,4 +165,6 @@ class History:
             action=row["action"],
             success=bool(row["success"]),
             error_message=row["error_message"],
+            service_hash=row["service_hash"],
+            vmem_cleared=bool(row["vmem_cleared"]),
         )

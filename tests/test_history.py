@@ -221,6 +221,51 @@ class TestHistoryRecording:
         records = history.get_history("controller")
         assert records[0].timestamp is not None
 
+    def test_record_stores_module(self, history):
+        """Record stores and retrieves module field."""
+        record = DeploymentRecord(
+            module="som1",
+            app="controller",
+            binary_hash="a1b2c3d4",
+            remote_path="/opt/disco/bin/controller",
+            action="push",
+            success=True,
+        )
+        history.record(record)
+
+        records = history.get_history("controller")
+        assert records[0].module == "som1"
+
+    def test_record_stores_service_hash(self, history):
+        """Record stores and retrieves service_hash field."""
+        record = DeploymentRecord(
+            app="controller",
+            binary_hash="a1b2c3d4",
+            remote_path="/opt/disco/bin/controller",
+            action="push",
+            success=True,
+            service_hash="servicehash123",
+        )
+        history.record(record)
+
+        records = history.get_history("controller")
+        assert records[0].service_hash == "servicehash123"
+
+    def test_record_stores_vmem_cleared(self, history):
+        """Record stores and retrieves vmem_cleared field."""
+        record = DeploymentRecord(
+            app="controller",
+            binary_hash="a1b2c3d4",
+            remote_path="/opt/disco/bin/controller",
+            action="push",
+            success=True,
+            vmem_cleared=True,
+        )
+        history.record(record)
+
+        records = history.get_history("controller")
+        assert records[0].vmem_cleared is True
+
 
 class TestHistoryQuery:
     """Tests for querying deployment history."""
