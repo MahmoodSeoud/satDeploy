@@ -321,3 +321,84 @@ class TestHistoryQuery:
         """Get last deployment returns None for unknown app."""
         record = history_with_records.get_last_deployment("unknown")
         assert record is None
+
+
+class TestModuleState:
+    """Tests for module state queries."""
+
+    @pytest.fixture
+    def history_with_modules(self, tmp_path):
+        """History with records for multiple modules."""
+        db_path = tmp_path / ".satdeploy" / "history.db"
+        h = History(db_path)
+        h.init_db()
+
+        # Deploy controller to som1
+        h.record(DeploymentRecord(
+            module="som1",
+            app="controller",
+            binary_hash="hash_ctrl_som1_v1",
+            remote_path="/path/controller",
+            action="push",
+            success=True,
+        ))
+        # Update controller on som1
+        h.record(DeploymentRecord(
+            module="som1",
+            app="controller",
+            binary_hash="hash_ctrl_som1_v2",
+            remote_path="/path/controller",
+            action="push",
+            success=True,
+        ))
+        # Deploy csp_server to som1
+        h.record(DeploymentRecord(
+            module="som1",
+            app="csp_server",
+            binary_hash="hash_csp_som1",
+            remote_path="/path/csp_server",
+            action="push",
+            success=True,
+        ))
+        # Deploy controller to som2
+        h.record(DeploymentRecord(
+            module="som2",
+            app="controller",
+            binary_hash="hash_ctrl_som2",
+            remote_path="/path/controller",
+            action="push",
+            success=True,
+        ))
+
+        return h
+
+    def test_get_module_state_returns_last_state_per_app(self, history_with_modules):
+        """get_module_state returns the last deployment for each app on the module."""
+        state = history_with_modules.get_module_state("som1")
+
+        # Should have 2 apps
+        assert len(state) == 2
+        assert "controller" in state
+        assert "csp_server" in state
+
+        # Controller should be v2 (most recent)
+        assert state["controller"].binary_hash == "hash_ctrl_som1_v2"
+        assert state["csp_server"].binary_hash == "hash_csp_som1"
+
+    def test_get_module_state_empty_for_unknown_module(self, history_with_modules):
+        """get_module_state returns empty dict for unknown module."""
+        state = history_with_modules.get_module_state("unknown")
+        assert state == {}
+
+    def test_get_module_state_separate_modules(self, history_with_modules):
+        """get_module_state returns separate state per module."""
+        som1_state = history_with_modules.get_module_state("som1")
+        som2_state = history_with_modules.get_module_state("som2")
+
+        # som1 has 2 apps
+        assert len(som1_state) == 2
+
+        # som2 has only 1 app
+        assert len(som2_state) == 1
+        assert "controller" in som2_state
+        assert som2_state["controller"].binary_hash == "hash_ctrl_som2"

@@ -151,6 +151,33 @@ class History:
         records = self.get_history(app, limit=1)
         return records[0] if records else None
 
+    def get_module_state(self, module: str) -> dict[str, DeploymentRecord]:
+        """Get last known state of all apps on a module.
+
+        Args:
+            module: The module name.
+
+        Returns:
+            Dict mapping app name to most recent DeploymentRecord for that app.
+        """
+        conn = sqlite3.connect(self._db_path)
+        conn.row_factory = sqlite3.Row
+
+        # Get distinct apps for this module, then get the most recent for each
+        query = """
+            SELECT * FROM deployments d1
+            WHERE module = ?
+            AND timestamp = (
+                SELECT MAX(timestamp) FROM deployments d2
+                WHERE d2.module = d1.module AND d2.app = d1.app
+            )
+        """
+        cursor = conn.execute(query, (module,))
+        rows = cursor.fetchall()
+        conn.close()
+
+        return {row["app"]: self._row_to_record(row) for row in rows}
+
     def _row_to_record(self, row: sqlite3.Row) -> DeploymentRecord:
         """Convert a database row to a DeploymentRecord."""
         return DeploymentRecord(
