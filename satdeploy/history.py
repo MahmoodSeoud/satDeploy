@@ -22,6 +22,7 @@ class DeploymentRecord:
     backup_path: Optional[str] = None
     error_message: Optional[str] = None
     service_hash: Optional[str] = None
+    vmem_cleared: bool = False
     id: Optional[int] = None
 
 

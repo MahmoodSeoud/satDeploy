@@ -105,6 +105,29 @@ class TestDeploymentRecordModule:
         )
         assert record.service_hash is None
 
+    def test_deployment_record_has_vmem_cleared_field(self):
+        """DeploymentRecord has vmem_cleared field."""
+        record = DeploymentRecord(
+            app="controller",
+            binary_hash="a1b2c3d4",
+            remote_path="/opt/disco/bin/controller",
+            action="push",
+            success=True,
+            vmem_cleared=True,
+        )
+        assert record.vmem_cleared is True
+
+    def test_vmem_cleared_defaults_to_false(self):
+        """vmem_cleared defaults to False."""
+        record = DeploymentRecord(
+            app="controller",
+            binary_hash="a1b2c3d4",
+            remote_path="/opt/disco/bin/controller",
+            action="push",
+            success=True,
+        )
+        assert record.vmem_cleared is False
+
 
 class TestHistoryRecording:
     """Tests for recording deployments."""
