@@ -20,6 +20,18 @@ class ModuleConfig:
     baudrate: int
     vmem_path: str
 
+
+@dataclass
+class AppConfig:
+    """Configuration for a deployable application."""
+
+    name: str
+    local: str
+    remote: str
+    service: str | None
+    service_template: str | None
+    vmem_dir: str | None
+
 DEFAULT_CONFIG_DIR = Path.home() / ".satdeploy"
 
 

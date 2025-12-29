@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from satdeploy.config import Config, DEFAULT_CONFIG_DIR, ModuleConfig
+from satdeploy.config import Config, DEFAULT_CONFIG_DIR, ModuleConfig, AppConfig
 
 
 class TestConfigPath:
@@ -204,3 +204,40 @@ class TestModuleConfig:
         assert module.interface == 0
         assert module.baudrate == 100000
         assert module.vmem_path == "/home/root/a53vmem"
+
+
+class TestAppConfig:
+    """Test AppConfig dataclass."""
+
+    def test_app_config_holds_app_settings(self):
+        """AppConfig should hold all app-specific settings."""
+        app = AppConfig(
+            name="a53-app-sys-manager",
+            local="./build/a53-app-sys-manager",
+            remote="/usr/bin/a53-app-sys-manager",
+            service="a53-app-sys-manager.service",
+            service_template="[Unit]\nDescription=Test",
+            vmem_dir="/home/root/a53vmem",
+        )
+
+        assert app.name == "a53-app-sys-manager"
+        assert app.local == "./build/a53-app-sys-manager"
+        assert app.remote == "/usr/bin/a53-app-sys-manager"
+        assert app.service == "a53-app-sys-manager.service"
+        assert app.service_template == "[Unit]\nDescription=Test"
+        assert app.vmem_dir == "/home/root/a53vmem"
+
+    def test_app_config_optional_fields_can_be_none(self):
+        """AppConfig optional fields should allow None."""
+        app = AppConfig(
+            name="upload_client",
+            local="./build/upload_client",
+            remote="/usr/bin/upload_client",
+            service=None,
+            service_template=None,
+            vmem_dir=None,
+        )
+
+        assert app.service is None
+        assert app.service_template is None
+        assert app.vmem_dir is None
