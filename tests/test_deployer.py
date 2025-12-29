@@ -303,3 +303,28 @@ class TestClearVmemDir:
         run_calls = [str(c) for c in mock_ssh.run.call_args_list]
         assert any("rm -rf" in call and "/home/root/a53vmem" in call for call in run_calls)
         assert any("mkdir -p" in call and "/home/root/a53vmem" in call for call in run_calls)
+
+
+class TestWriteRemoteFile:
+    """Test writing string content to remote file."""
+
+    def test_write_remote_file_creates_file_with_content(self):
+        """Should write string content to a remote file via shell."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+
+        content = "[Unit]\nDescription=Test Service\n"
+        deployer.write_remote_file("/etc/systemd/system/test.service", content)
+
+        # Should have called run with content being written to file
+        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
+        assert len(run_calls) == 1
+        assert "/etc/systemd/system/test.service" in run_calls[0]
+        # Verify the content is passed somehow (tee, cat heredoc, etc.)
+        assert "Test Service" in run_calls[0]

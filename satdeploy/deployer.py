@@ -156,3 +156,14 @@ class Deployer:
         """
         self._ssh.run(f"rm -rf '{vmem_dir}'/*", check=False)
         self._ssh.run(f"mkdir -p '{vmem_dir}'")
+
+    def write_remote_file(self, remote_path: str, content: str) -> None:
+        """Write string content to a remote file.
+
+        Args:
+            remote_path: Path on the remote host.
+            content: The string content to write.
+        """
+        # Use heredoc to write content, avoiding shell escaping issues
+        cmd = f"cat > '{remote_path}' << 'SATDEPLOY_EOF'\n{content}\nSATDEPLOY_EOF"
+        self._ssh.run(cmd)
