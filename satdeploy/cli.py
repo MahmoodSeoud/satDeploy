@@ -750,14 +750,31 @@ def fleet():
     pass
 
 
-@fleet.command()
+def check_module_online(host: str, user: str) -> bool:
+    """Check if a module is reachable via SSH.
+
+    Args:
+        host: The module's hostname or IP.
+        user: The SSH user.
+
+    Returns:
+        True if module is reachable, False otherwise.
+    """
+    try:
+        with SSHClient(host=host, user=user) as ssh:
+            return True
+    except SSHError:
+        return False
+
+
+@fleet.command("status")
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def status(config_dir: Path | None):
+def fleet_status(config_dir: Path | None):
     """Show status of all modules."""
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     config = Config(config_dir=config_dir)
@@ -767,4 +784,23 @@ def status(config_dir: Path | None):
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    click.echo("Fleet status placeholder")
+    modules = config.get_modules()
+
+    if not modules:
+        click.echo("No modules configured.")
+        return
+
+    click.echo(click.style("Fleet Status", bold=True))
+    click.echo("")
+
+    for module_name, module in modules.items():
+        online = check_module_online(module.host, module.user)
+
+        if online:
+            status_symbol = click.style(SYMBOLS["check"], fg="green")
+            status_text = click.style("online", fg="green")
+        else:
+            status_symbol = click.style(SYMBOLS["cross"], fg="red")
+            status_text = click.style("offline", fg="red")
+
+        click.echo(f"  {status_symbol} {module_name:<12} {status_text}")
