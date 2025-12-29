@@ -477,3 +477,89 @@ class TestGetAppConfig:
         config = Config(config_dir=tmp_path)
         config.load()
         assert config.get_app("nonexistent") is None
+
+
+class TestGetAllAppNames:
+    """Test get_all_app_names() method."""
+
+    def test_get_all_app_names_returns_list(self, tmp_path):
+        """get_all_app_names() should return list of all app names."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {},
+            "appsys": {},
+            "apps": {
+                "app1": {"local": "./a", "remote": "/a"},
+                "app2": {"local": "./b", "remote": "/b"},
+                "app3": {"local": "./c", "remote": "/c"},
+            },
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        names = config.get_all_app_names()
+
+        assert len(names) == 3
+        assert "app1" in names
+        assert "app2" in names
+        assert "app3" in names
+
+    def test_get_all_app_names_empty(self, tmp_path):
+        """get_all_app_names() should return empty list when no apps."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {},
+            "appsys": {},
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        names = config.get_all_app_names()
+
+        assert names == []
+
+
+class TestGetAppsys:
+    """Test get_appsys() method."""
+
+    def test_get_appsys_returns_dict(self, tmp_path):
+        """get_appsys() should return appsys settings dict."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {},
+            "appsys": {
+                "netmask": 8,
+                "interface": 0,
+                "baudrate": 100000,
+                "vmem_path": "/home/root/a53vmem",
+            },
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        appsys = config.get_appsys()
+
+        assert appsys["netmask"] == 8
+        assert appsys["interface"] == 0
+        assert appsys["baudrate"] == 100000
+        assert appsys["vmem_path"] == "/home/root/a53vmem"
+
+    def test_get_appsys_empty_when_not_configured(self, tmp_path):
+        """get_appsys() should return empty dict if not configured."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "target": {"host": "192.168.1.50", "user": "root"},
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        appsys = config.get_appsys()
+
+        assert appsys == {}

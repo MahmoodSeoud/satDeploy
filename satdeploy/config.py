@@ -222,3 +222,23 @@ class Config:
         if name not in modules:
             raise KeyError(f"Module '{name}' not found")
         return modules[name]
+
+    def get_all_app_names(self) -> list[str]:
+        """Get names of all configured apps.
+
+        Returns:
+            List of app names.
+        """
+        if self._data is None:
+            return []
+        return list(self._data.get("apps", {}).keys())
+
+    def get_appsys(self) -> dict:
+        """Get appsys network settings.
+
+        Returns:
+            Dictionary with appsys settings (netmask, interface, etc.).
+        """
+        if self._data is None:
+            return {}
+        return self._data.get("appsys", {})
