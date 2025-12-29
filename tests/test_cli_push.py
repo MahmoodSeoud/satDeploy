@@ -126,7 +126,7 @@ class TestPushCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -162,7 +162,7 @@ class TestPushCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -199,7 +199,7 @@ class TestPushCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -252,7 +252,7 @@ class TestPushCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -301,7 +301,7 @@ class TestPushWithDependencies:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -345,7 +345,7 @@ class TestPushWithDependencies:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -406,7 +406,7 @@ class TestPushWithDependencies:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -494,7 +494,7 @@ class TestPushHistoryLogging:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -542,7 +542,7 @@ class TestPushHistoryLogging:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -632,7 +632,7 @@ class TestPushPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -672,7 +672,7 @@ class TestPushPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
@@ -710,7 +710,7 @@ class TestPushPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,

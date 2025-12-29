@@ -258,3 +258,94 @@ class TestSSHConnectionErrors:
                 client.connect()
 
             assert "192.168.1.50" in str(exc_info.value) or "ssh" in str(exc_info.value).lower()
+
+
+class TestSSHReadWriteFile:
+    """Test SSH file read/write operations."""
+
+    def test_read_file_returns_content(self):
+        """Should return file content as string."""
+        with patch("satdeploy.ssh.paramiko.SSHClient") as mock_ssh:
+            mock_stdout = Mock()
+            mock_stdout.read.return_value = b"file content"
+            mock_stdout.channel.recv_exit_status.return_value = 0
+            mock_stderr = Mock()
+            mock_stderr.read.return_value = b""
+            mock_ssh.return_value.exec_command.return_value = (
+                Mock(),
+                mock_stdout,
+                mock_stderr,
+            )
+
+            client = SSHClient(host="192.168.1.50", user="root")
+            client.connect()
+            result = client.read_file("/etc/systemd/system/test.service")
+
+            assert result == "file content"
+            cmd = mock_ssh.return_value.exec_command.call_args[0][0]
+            assert "cat" in cmd
+            assert "/etc/systemd/system/test.service" in cmd
+
+    def test_read_file_returns_none_if_not_exists(self):
+        """Should return None if file doesn't exist."""
+        with patch("satdeploy.ssh.paramiko.SSHClient") as mock_ssh:
+            mock_stdout = Mock()
+            mock_stdout.read.return_value = b""
+            mock_stdout.channel.recv_exit_status.return_value = 1
+            mock_stderr = Mock()
+            mock_stderr.read.return_value = b"No such file"
+            mock_ssh.return_value.exec_command.return_value = (
+                Mock(),
+                mock_stdout,
+                mock_stderr,
+            )
+
+            client = SSHClient(host="192.168.1.50", user="root")
+            client.connect()
+            result = client.read_file("/nonexistent/file")
+
+            assert result is None
+
+    def test_write_file_sudo_uses_tee(self):
+        """Should use sudo tee to write file."""
+        with patch("satdeploy.ssh.paramiko.SSHClient") as mock_ssh:
+            mock_stdout = Mock()
+            mock_stdout.read.return_value = b""
+            mock_stdout.channel.recv_exit_status.return_value = 0
+            mock_stderr = Mock()
+            mock_stderr.read.return_value = b""
+            mock_ssh.return_value.exec_command.return_value = (
+                Mock(),
+                mock_stdout,
+                mock_stderr,
+            )
+
+            client = SSHClient(host="192.168.1.50", user="root")
+            client.connect()
+            client.write_file_sudo("/etc/systemd/system/test.service", "[Service]\nExecStart=/bin/app")
+
+            cmd = mock_ssh.return_value.exec_command.call_args[0][0]
+            assert "sudo tee" in cmd
+            assert "/etc/systemd/system/test.service" in cmd
+
+    def test_write_file_sudo_escapes_quotes(self):
+        """Should escape single quotes in content."""
+        with patch("satdeploy.ssh.paramiko.SSHClient") as mock_ssh:
+            mock_stdout = Mock()
+            mock_stdout.read.return_value = b""
+            mock_stdout.channel.recv_exit_status.return_value = 0
+            mock_stderr = Mock()
+            mock_stderr.read.return_value = b""
+            mock_ssh.return_value.exec_command.return_value = (
+                Mock(),
+                mock_stdout,
+                mock_stderr,
+            )
+
+            client = SSHClient(host="192.168.1.50", user="root")
+            client.connect()
+            client.write_file_sudo("/test", "it's a test")
+
+            cmd = mock_ssh.return_value.exec_command.call_args[0][0]
+            # Single quote should be escaped
+            assert "'" in cmd

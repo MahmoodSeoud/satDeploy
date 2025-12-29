@@ -58,29 +58,31 @@ class TestServiceControl:
     def test_stop_service(self):
         """Should stop a service using systemctl."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="", stderr="")
 
         manager = ServiceManager(mock_ssh)
-        manager.stop("controller.service")
+        result = manager.stop("controller.service")
 
+        assert result is True
         assert "systemctl stop" in mock_ssh.run.call_args[0][0]
         assert "controller.service" in mock_ssh.run.call_args[0][0]
 
     def test_start_service(self):
         """Should start a service using systemctl."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="", stderr="")
 
         manager = ServiceManager(mock_ssh)
-        manager.start("controller.service")
+        result = manager.start("controller.service")
 
+        assert result is True
         assert "systemctl start" in mock_ssh.run.call_args[0][0]
         assert "controller.service" in mock_ssh.run.call_args[0][0]
 
     def test_restart_service(self):
         """Should restart a service using systemctl."""
         mock_ssh = Mock()
-        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.run.return_value = Mock(exit_code=0, stdout="", stderr="")
 
         manager = ServiceManager(mock_ssh)
         manager.restart("controller.service")
@@ -141,3 +143,38 @@ class TestServiceLogs:
         logs = manager.get_logs("controller.service")
 
         assert logs == "log line 1\nlog line 2\n"
+
+
+class TestDaemonReload:
+    """Test systemd daemon reload."""
+
+    def test_daemon_reload_runs_systemctl(self):
+        """Should run systemctl daemon-reload."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(stdout="", stderr="", exit_code=0)
+
+        manager = ServiceManager(mock_ssh)
+        manager.daemon_reload()
+
+        mock_ssh.run.assert_called_once()
+        cmd = mock_ssh.run.call_args[0][0]
+        assert "systemctl daemon-reload" in cmd
+        assert "sudo" in cmd
+
+
+class TestServiceEnable:
+    """Test enabling services."""
+
+    def test_enable_runs_systemctl_enable(self):
+        """Should run systemctl enable."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(stdout="", stderr="", exit_code=0)
+
+        manager = ServiceManager(mock_ssh)
+        manager.enable("controller.service")
+
+        mock_ssh.run.assert_called_once()
+        cmd = mock_ssh.run.call_args[0][0]
+        assert "systemctl enable" in cmd
+        assert "controller.service" in cmd
+        assert "sudo" in cmd

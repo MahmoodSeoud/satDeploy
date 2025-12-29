@@ -156,3 +156,33 @@ class SSHClient:
             dst: Destination path.
         """
         self.run(f"cp '{src}' '{dst}'")
+
+    def read_file(self, remote_path: str) -> str | None:
+        """Read content of a remote file.
+
+        Args:
+            remote_path: Path to the file on remote host.
+
+        Returns:
+            File content as string, or None if file doesn't exist.
+        """
+        result = self.run(f"cat '{remote_path}'", check=False)
+        if result.exit_code != 0:
+            return None
+        return result.stdout
+
+    def write_file_sudo(self, remote_path: str, content: str) -> None:
+        """Write content to a remote file using sudo.
+
+        Uses 'sudo tee' to write to files that require elevated privileges.
+
+        Args:
+            remote_path: Path to write to on remote host.
+            content: Content to write.
+
+        Raises:
+            SSHError: If write fails.
+        """
+        # Escape single quotes in content for shell
+        escaped = content.replace("'", "'\"'\"'")
+        self.run(f"echo '{escaped}' | sudo tee '{remote_path}' > /dev/null")
