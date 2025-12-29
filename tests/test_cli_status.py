@@ -12,6 +12,23 @@ from satdeploy.output import SYMBOLS
 from satdeploy.services import ServiceStatus
 
 
+def make_module_config(apps: dict) -> dict:
+    """Create a module-based config for testing."""
+    return {
+        "modules": {
+            "som1": {
+                "host": "192.168.1.50",
+                "user": "root",
+                "csp_addr": 5421,
+            }
+        },
+        "appsys": {},
+        "backup_dir": "/opt/satdeploy/backups",
+        "max_backups": 10,
+        "apps": apps,
+    }
+
+
 class TestStatusCommand:
     """Test the status command."""
 
@@ -28,7 +45,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -41,15 +58,7 @@ class TestStatusCommand:
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {},
-                }
-            )
-        )
+        config_file.write_text(yaml.dump(make_module_config({})))
 
         mock_ssh = MagicMock()
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
@@ -57,7 +66,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -72,22 +81,18 @@ class TestStatusCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        },
-                        "csp_server": {
-                            "local": "./build/csp_server",
-                            "remote": "/usr/bin/csp_server",
-                            "service": "csp_server.service",
-                        },
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
                     },
-                }
+                    "csp_server": {
+                        "local": "./build/csp_server",
+                        "remote": "/usr/bin/csp_server",
+                        "service": "csp_server.service",
+                    },
+                })
             )
         )
 
@@ -98,7 +103,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -114,17 +119,13 @@ class TestStatusCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        },
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
                     },
-                }
+                })
             )
         )
 
@@ -135,7 +136,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -150,17 +151,13 @@ class TestStatusCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        },
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
                     },
-                }
+                })
             )
         )
 
@@ -171,7 +168,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -186,17 +183,13 @@ class TestStatusCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "libparam": {
-                            "local": "./build/libparam.so",
-                            "remote": "/usr/lib/libparam.so",
-                            "service": None,
-                        },
+                make_module_config({
+                    "libparam": {
+                        "local": "./build/libparam.so",
+                        "remote": "/usr/lib/libparam.so",
+                        "service": None,
                     },
-                }
+                })
             )
         )
 
@@ -207,7 +200,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -220,15 +213,7 @@ class TestStatusCommand:
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {},
-                }
-            )
-        )
+        config_file.write_text(yaml.dump(make_module_config({})))
 
         mock_ssh = MagicMock()
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
@@ -236,7 +221,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -255,17 +240,13 @@ class TestStatusPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        },
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
                     },
-                }
+                })
             )
         )
 
@@ -276,7 +257,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -292,17 +273,13 @@ class TestStatusPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        },
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
                     },
-                }
+                })
             )
         )
 
@@ -313,7 +290,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -329,17 +306,13 @@ class TestStatusPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "libparam": {
-                            "local": "./build/libparam.so",
-                            "remote": "/usr/lib/libparam.so",
-                            "service": None,
-                        },
+                make_module_config({
+                    "libparam": {
+                        "local": "./build/libparam.so",
+                        "remote": "/usr/lib/libparam.so",
+                        "service": None,
                     },
-                }
+                })
             )
         )
 
@@ -350,7 +323,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -368,17 +341,13 @@ class TestStatusPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        },
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
                     },
-                }
+                })
             )
         )
 
@@ -386,6 +355,7 @@ class TestStatusPolishedOutput:
         history = History(config_dir / "history.db")
         history.init_db()
         history.record(DeploymentRecord(
+            module="som1",
             app="controller",
             binary_hash="a3f2c9b1",
             remote_path="/opt/disco/bin/controller",
@@ -401,7 +371,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "-m", "som1", "--config-dir", str(config_dir)],
             color=True,
         )
 

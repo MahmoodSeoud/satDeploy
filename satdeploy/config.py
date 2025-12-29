@@ -165,10 +165,6 @@ class Config:
 
         Returns:
             Dictionary mapping module names to ModuleConfig objects.
-
-        Note:
-            For backward compatibility, if config has 'target' instead of
-            'modules', a single module named 'default' is created.
         """
         if self._data is None:
             return {}
@@ -176,29 +172,13 @@ class Config:
         modules_data = self._data.get("modules", {})
         appsys = self._data.get("appsys", {})
 
-        # Backward compatibility: treat old 'target' as single 'default' module
-        if not modules_data and "target" in self._data:
-            target = self._data["target"]
-            return {
-                "default": ModuleConfig(
-                    name="default",
-                    host=target["host"],
-                    user=target["user"],
-                    csp_addr=0,
-                    netmask=0,
-                    interface=0,
-                    baudrate=0,
-                    vmem_path="",
-                )
-            }
-
         result = {}
         for name, mod in modules_data.items():
             result[name] = ModuleConfig(
                 name=name,
                 host=mod["host"],
                 user=mod["user"],
-                csp_addr=mod["csp_addr"],
+                csp_addr=mod.get("csp_addr", 0),
                 netmask=appsys.get("netmask", 0),
                 interface=appsys.get("interface", 0),
                 baudrate=appsys.get("baudrate", 0),

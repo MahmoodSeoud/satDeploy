@@ -29,7 +29,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="192.168.1.50\nroot\n",
+            input="\n192.168.1.50\nroot\n\n",  # module, host, user, no more modules
         )
 
         assert result.exit_code == 0
@@ -43,7 +43,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="192.168.1.50\nroot\n",
+            input="\n192.168.1.50\nroot\n\n",  # module, host, user, no more modules
         )
 
         assert "host" in result.output.lower() or "Target host" in result.output
@@ -56,7 +56,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="192.168.1.50\nroot\n",
+            input="\n192.168.1.50\nroot\n\n",  # module, host, user, no more modules
         )
 
         assert "user" in result.output.lower()
@@ -69,14 +69,34 @@ class TestInitCommand:
         runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="10.0.0.100\nadmin\n",
+            input="som1\n10.0.0.100\nadmin\n\n",  # module, host, user, no more modules
         )
 
         config_file = config_dir / "config.yaml"
         config = yaml.safe_load(config_file.read_text())
 
-        assert config["target"]["host"] == "10.0.0.100"
-        assert config["target"]["user"] == "admin"
+        assert config["modules"]["som1"]["host"] == "10.0.0.100"
+        assert config["modules"]["som1"]["user"] == "admin"
+
+    def test_init_saves_multiple_modules(self, tmp_path):
+        """Init should save multiple modules when user adds more."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+
+        runner.invoke(
+            main,
+            ["init", "--config-dir", str(config_dir)],
+            # som1, host, user, yes add more, som2, host, user, no more
+            input="som1\n10.0.0.100\nroot\ny\nsom2\n10.0.0.101\nroot\n\n",
+        )
+
+        config_file = config_dir / "config.yaml"
+        config = yaml.safe_load(config_file.read_text())
+
+        assert "som1" in config["modules"]
+        assert "som2" in config["modules"]
+        assert config["modules"]["som1"]["host"] == "10.0.0.100"
+        assert config["modules"]["som2"]["host"] == "10.0.0.101"
 
     def test_init_sets_defaults(self, tmp_path):
         """Init should set default values for backup_dir and max_backups."""
@@ -86,7 +106,7 @@ class TestInitCommand:
         runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="192.168.1.50\nroot\n",
+            input="\n192.168.1.50\nroot\n\n",  # module, host, user, no more modules
         )
 
         config_file = config_dir / "config.yaml"
@@ -94,7 +114,8 @@ class TestInitCommand:
 
         assert config["backup_dir"] == "/opt/satdeploy/backups"
         assert config["max_backups"] == 10
-        assert config["apps"] == {}
+        assert "example_app" in config["apps"]
+        assert config["apps"]["example_app"]["service"] is None
 
     def test_init_warns_if_config_exists(self, tmp_path):
         """Init should warn if config already exists."""
@@ -117,16 +138,16 @@ class TestInitCommand:
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
-        (config_dir / "config.yaml").write_text("target:\n  host: old\n  user: old\n")
+        (config_dir / "config.yaml").write_text("modules:\n  old:\n    host: old\n    user: old\n")
 
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="y\n192.168.1.50\nroot\n",  # Overwrite, then provide new values
+            input="y\n\n192.168.1.50\nroot\n\n",  # Overwrite, module, host, user, no more
         )
 
         config = yaml.safe_load((config_dir / "config.yaml").read_text())
-        assert config["target"]["host"] == "192.168.1.50"
+        assert config["modules"]["default"]["host"] == "192.168.1.50"
 
 
 class TestInitPolishedOutput:
@@ -140,7 +161,7 @@ class TestInitPolishedOutput:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="192.168.1.50\nroot\n",
+            input="\n192.168.1.50\nroot\n\n",  # module, host, user, no more modules
             color=True,
         )
 

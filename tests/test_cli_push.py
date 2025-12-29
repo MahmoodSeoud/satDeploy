@@ -11,6 +11,22 @@ from satdeploy.cli import main
 from satdeploy.output import SYMBOLS
 
 
+def make_module_config(apps: dict, backup_dir: str = "/opt/satdeploy/backups") -> dict:
+    """Create a module-based config for testing."""
+    return {
+        "modules": {
+            "som1": {
+                "host": "192.168.1.50",
+                "user": "root",
+                "csp_addr": 5421,
+            }
+        },
+        "appsys": {},
+        "backup_dir": backup_dir,
+        "apps": apps,
+    }
+
+
 class TestPushCommand:
     """Test the push command."""
 
@@ -21,12 +37,12 @@ class TestPushCommand:
         assert result.exit_code == 0
         assert "app" in result.output.lower()
 
-    def test_push_requires_app_name(self):
-        """Push should require an app name argument."""
+    def test_push_requires_module(self):
+        """Push should require --module option."""
         runner = CliRunner()
-        result = runner.invoke(main, ["push"])
+        result = runner.invoke(main, ["push", "controller"])
         assert result.exit_code != 0
-        assert "app" in result.output.lower() or "missing" in result.output.lower()
+        assert "module" in result.output.lower()
 
     def test_push_fails_without_config(self, tmp_path):
         """Push should fail if config doesn't exist."""
@@ -35,7 +51,7 @@ class TestPushCommand:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -47,19 +63,11 @@ class TestPushCommand:
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {},
-                }
-            )
-        )
+        config_file.write_text(yaml.dump(make_module_config({})))
 
         result = runner.invoke(
             main,
-            ["push", "unknown_app", "--config-dir", str(config_dir)],
+            ["push", "unknown_app", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -73,23 +81,19 @@ class TestPushCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "/nonexistent/path/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "/nonexistent/path/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -97,7 +101,7 @@ class TestPushCommand:
 
     @patch("satdeploy.cli.SSHClient")
     def test_push_connects_to_target(self, mock_ssh_class, tmp_path):
-        """Push should connect to the configured target."""
+        """Push should connect to the configured module."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
@@ -108,17 +112,13 @@ class TestPushCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": str(binary),
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -126,11 +126,11 @@ class TestPushCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         mock_ssh_class.assert_called_once_with(host="192.168.1.50", user="root")
@@ -148,17 +148,13 @@ class TestPushCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": str(binary),
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -166,11 +162,11 @@ class TestPushCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -189,17 +185,13 @@ class TestPushCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "/default/path/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "/default/path/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -207,13 +199,14 @@ class TestPushCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
             [
                 "push",
                 "controller",
+                "-m", "som1",
                 "--local",
                 str(binary),
                 "--config-dir",
@@ -245,17 +238,13 @@ class TestPushCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "~/build/controller",  # Uses tilde
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "~/build/controller",  # Uses tilde
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -263,11 +252,11 @@ class TestPushCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0, f"Failed with: {result.output}"
@@ -292,23 +281,19 @@ class TestPushWithDependencies:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                            "depends_on": ["csp_server"],
-                        },
-                        "csp_server": {
-                            "local": str(binary),
-                            "remote": "/usr/bin/csp_server",
-                            "service": "csp_server.service",
-                        },
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                        "depends_on": ["csp_server"],
                     },
-                }
+                    "csp_server": {
+                        "local": str(binary),
+                        "remote": "/usr/bin/csp_server",
+                        "service": "csp_server.service",
+                    },
+                })
             )
         )
 
@@ -316,11 +301,11 @@ class TestPushWithDependencies:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "csp_server", "--config-dir", str(config_dir)],
+            ["push", "csp_server", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -340,23 +325,19 @@ class TestPushWithDependencies:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                            "depends_on": ["csp_server"],
-                        },
-                        "csp_server": {
-                            "local": str(binary),
-                            "remote": "/usr/bin/csp_server",
-                            "service": "csp_server.service",
-                        },
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                        "depends_on": ["csp_server"],
                     },
-                }
+                    "csp_server": {
+                        "local": str(binary),
+                        "remote": "/usr/bin/csp_server",
+                        "service": "csp_server.service",
+                    },
+                })
             )
         )
 
@@ -364,11 +345,11 @@ class TestPushWithDependencies:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "csp_server", "--config-dir", str(config_dir)],
+            ["push", "csp_server", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -400,28 +381,24 @@ class TestPushWithDependencies:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "libparam": {
-                            "local": str(lib),
-                            "remote": "/usr/lib/libparam.so",
-                            "service": None,
-                            "restart": ["csp_server", "controller"],
-                        },
-                        "csp_server": {
-                            "local": "./build/csp_server",
-                            "remote": "/usr/bin/csp_server",
-                            "service": "csp_server.service",
-                        },
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        },
+                make_module_config({
+                    "libparam": {
+                        "local": str(lib),
+                        "remote": "/usr/lib/libparam.so",
+                        "service": None,
+                        "restart": ["csp_server", "controller"],
                     },
-                }
+                    "csp_server": {
+                        "local": "./build/csp_server",
+                        "remote": "/usr/bin/csp_server",
+                        "service": "csp_server.service",
+                    },
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    },
+                })
             )
         )
 
@@ -429,11 +406,11 @@ class TestPushWithDependencies:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "libparam", "--config-dir", str(config_dir)],
+            ["push", "libparam", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -457,17 +434,13 @@ class TestPushWithDependencies:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "mseo"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": str(binary),
-                            "remote": "/opt/disco/bin/controller",
-                            "service": None,
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": None,
+                    }
+                })
             )
         )
 
@@ -480,7 +453,7 @@ class TestPushWithDependencies:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         # Should fail with clean error, not traceback
@@ -507,17 +480,13 @@ class TestPushHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": str(binary),
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -525,11 +494,11 @@ class TestPushHistoryLogging:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -542,6 +511,7 @@ class TestPushHistoryLogging:
         assert records[0].action == "push"
         assert records[0].success is True
         assert records[0].remote_path == "/opt/disco/bin/controller"
+        assert records[0].module == "som1"
 
     @patch("satdeploy.cli.SSHClient")
     def test_push_logs_binary_hash(self, mock_ssh_class, tmp_path):
@@ -558,17 +528,13 @@ class TestPushHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": str(binary),
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -576,11 +542,11 @@ class TestPushHistoryLogging:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -606,17 +572,13 @@ class TestPushHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": str(binary),
-                            "remote": "/opt/disco/bin/controller",
-                            "service": None,
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": None,
+                    }
+                })
             )
         )
 
@@ -628,7 +590,7 @@ class TestPushHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -656,17 +618,13 @@ class TestPushPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": str(binary),
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -674,11 +632,11 @@ class TestPushPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -700,17 +658,13 @@ class TestPushPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": str(binary),
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -718,11 +672,11 @@ class TestPushPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -742,17 +696,13 @@ class TestPushPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": str(binary),
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -760,11 +710,11 @@ class TestPushPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
             color=True,
         )
 

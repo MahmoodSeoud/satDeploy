@@ -11,6 +11,23 @@ from satdeploy.cli import main
 from satdeploy.output import SYMBOLS
 
 
+def make_module_config(apps: dict) -> dict:
+    """Create a module-based config for testing."""
+    return {
+        "modules": {
+            "som1": {
+                "host": "192.168.1.50",
+                "user": "root",
+                "csp_addr": 5421,
+            }
+        },
+        "appsys": {},
+        "backup_dir": "/opt/satdeploy/backups",
+        "max_backups": 10,
+        "apps": apps,
+    }
+
+
 class TestRollbackCommand:
     """Test the rollback command."""
 
@@ -35,7 +52,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -47,19 +64,11 @@ class TestRollbackCommand:
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {},
-                }
-            )
-        )
+        config_file.write_text(yaml.dump(make_module_config({})))
 
         result = runner.invoke(
             main,
-            ["rollback", "unknown_app", "--config-dir", str(config_dir)],
+            ["rollback", "unknown_app", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -74,17 +83,13 @@ class TestRollbackCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -93,12 +98,13 @@ class TestRollbackCommand:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n20240114-091500-def67890.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -115,17 +121,13 @@ class TestRollbackCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -134,12 +136,13 @@ class TestRollbackCommand:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n20240114-091500-def67890.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "def67890", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "def67890", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -155,28 +158,24 @@ class TestRollbackCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
         mock_ssh = MagicMock()
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.run.return_value = Mock(stdout="", exit_code=0)
+        mock_ssh.run.return_value = Mock(stdout="", stderr="", exit_code=0)
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -191,17 +190,13 @@ class TestRollbackCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -210,12 +205,13 @@ class TestRollbackCommand:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "zzzzzzzz", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "zzzzzzzz", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -230,17 +226,13 @@ class TestRollbackCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -249,12 +241,13 @@ class TestRollbackCommand:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -273,23 +266,19 @@ class TestRollbackWithDependencies:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                            "depends_on": ["csp_server"],
-                        },
-                        "csp_server": {
-                            "local": "./build/csp_server",
-                            "remote": "/usr/bin/csp_server",
-                            "service": "csp_server.service",
-                        },
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                        "depends_on": ["csp_server"],
                     },
-                }
+                    "csp_server": {
+                        "local": "./build/csp_server",
+                        "remote": "/usr/bin/csp_server",
+                        "service": "csp_server.service",
+                    },
+                })
             )
         )
 
@@ -298,12 +287,13 @@ class TestRollbackWithDependencies:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "csp_server", "--config-dir", str(config_dir)],
+            ["rollback", "csp_server", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -325,17 +315,13 @@ class TestRollbackHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -344,12 +330,13 @@ class TestRollbackHistoryLogging:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -374,17 +361,13 @@ class TestRollbackHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -393,12 +376,13 @@ class TestRollbackHistoryLogging:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -418,17 +402,13 @@ class TestRollbackHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -438,12 +418,13 @@ class TestRollbackHistoryLogging:
         # Use new format with hash in filename
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -466,17 +447,13 @@ class TestRollbackHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -485,13 +462,13 @@ class TestRollbackHistoryLogging:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         # First call returns backups, second call fails
         mock_ssh.run.side_effect = [
-            Mock(stdout="20240115-143022-abc12345.bak\n", exit_code=0),
+            Mock(stdout="20240115-143022-abc12345.bak\n", stderr="", exit_code=0),
             SSHError("Permission denied"),
         ]
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -515,17 +492,13 @@ class TestRollbackPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -534,12 +507,13 @@ class TestRollbackPolishedOutput:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -556,17 +530,13 @@ class TestRollbackPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -575,12 +545,13 @@ class TestRollbackPolishedOutput:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -596,17 +567,13 @@ class TestRollbackPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -615,12 +582,13 @@ class TestRollbackPolishedOutput:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240115-143022-abc12345.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -649,17 +617,13 @@ class TestRollbackDialBehavior:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -667,6 +631,7 @@ class TestRollbackDialBehavior:
         history = History(config_dir / "history.db")
         history.init_db()
         history.record(DeploymentRecord(
+            module="som1",
             app="controller",
             binary_hash="bbbbbbbb",
             remote_path="/opt/disco/bin/controller",
@@ -680,12 +645,13 @@ class TestRollbackDialBehavior:
         # Backups: C (newest), B (current), A (oldest)
         mock_ssh.run.return_value = Mock(
             stdout="20240117-120000-cccccccc.bak\n20240116-120000-bbbbbbbb.bak\n20240115-120000-aaaaaaaa.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -704,17 +670,13 @@ class TestRollbackDialBehavior:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -722,6 +684,7 @@ class TestRollbackDialBehavior:
         history = History(config_dir / "history.db")
         history.init_db()
         history.record(DeploymentRecord(
+            module="som1",
             app="controller",
             binary_hash="aaaaaaaa",
             remote_path="/opt/disco/bin/controller",
@@ -735,12 +698,13 @@ class TestRollbackDialBehavior:
         # Backups: C (newest), B, A (oldest/current)
         mock_ssh.run.return_value = Mock(
             stdout="20240117-120000-cccccccc.bak\n20240116-120000-bbbbbbbb.bak\n20240115-120000-aaaaaaaa.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         # Should warn (not error) because we're at the oldest version
@@ -758,17 +722,13 @@ class TestRollbackDialBehavior:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -776,6 +736,7 @@ class TestRollbackDialBehavior:
         history = History(config_dir / "history.db")
         history.init_db()
         history.record(DeploymentRecord(
+            module="som1",
             app="controller",
             binary_hash="aaaaaaaa",
             remote_path="/opt/disco/bin/controller",
@@ -788,13 +749,14 @@ class TestRollbackDialBehavior:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240117-120000-cccccccc.bak\n20240116-120000-bbbbbbbb.bak\n20240115-120000-aaaaaaaa.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         # Explicitly request C by hash even though we're at A (oldest)
         result = runner.invoke(
             main,
-            ["rollback", "controller", "cccccccc", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "cccccccc", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -813,17 +775,13 @@ class TestRollbackByHash:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                {
-                    "target": {"host": "192.168.1.50", "user": "root"},
-                    "backup_dir": "/opt/satdeploy/backups",
-                    "apps": {
-                        "controller": {
-                            "local": "./build/controller",
-                            "remote": "/opt/disco/bin/controller",
-                            "service": "controller.service",
-                        }
-                    },
-                }
+                make_module_config({
+                    "controller": {
+                        "local": "./build/controller",
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
             )
         )
 
@@ -832,13 +790,14 @@ class TestRollbackByHash:
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
             stdout="20240117-120000-cccccccc.bak\n20240116-120000-bbbbbbbb.bak\n20240115-120000-aaaaaaaa.bak\n",
+            stderr="",
             exit_code=0,
         )
 
         # Rollback by hash only (not full version string)
         result = runner.invoke(
             main,
-            ["rollback", "controller", "bbbbbbbb", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "bbbbbbbb", "-m", "som1", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0

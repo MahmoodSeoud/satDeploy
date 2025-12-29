@@ -343,53 +343,6 @@ class TestGetModules:
             config.get_module("unknown")
 
 
-class TestBackwardCompatibility:
-    """Test backward compatibility with old single-target config format."""
-
-    def test_old_target_format_creates_default_module(self, tmp_path):
-        """Old 'target' format should create a 'default' module."""
-        config_file = tmp_path / "config.yaml"
-        config_data = {
-            "target": {
-                "host": "192.168.1.50",
-                "user": "root",
-            },
-            "apps": {},
-        }
-        config_file.write_text(yaml.dump(config_data))
-
-        config = Config(config_dir=tmp_path)
-        config.load()
-        modules = config.get_modules()
-
-        assert len(modules) == 1
-        assert "default" in modules
-        assert modules["default"].host == "192.168.1.50"
-        assert modules["default"].user == "root"
-
-    def test_old_target_format_get_module_default(self, tmp_path):
-        """Should be able to get_module('default') with old format."""
-        config_file = tmp_path / "config.yaml"
-        config_data = {
-            "target": {
-                "host": "192.168.1.50",
-                "user": "root",
-            },
-            "apps": {},
-        }
-        config_file.write_text(yaml.dump(config_data))
-
-        config = Config(config_dir=tmp_path)
-        config.load()
-        module = config.get_module("default")
-
-        assert module.name == "default"
-        assert module.host == "192.168.1.50"
-        assert module.user == "root"
-        assert module.csp_addr == 0
-        assert module.netmask == 0
-
-
 class TestGetAppConfig:
     """Test get_app() returning AppConfig."""
 

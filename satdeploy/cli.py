@@ -6,13 +6,14 @@ from pathlib import Path
 
 import click
 
-from satdeploy.config import DEFAULT_CONFIG_DIR, Config
+from satdeploy.config import DEFAULT_CONFIG_DIR, Config, ModuleConfig, AppConfig
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
 from satdeploy.history import DeploymentRecord, History
 from satdeploy.output import success, warning, step, SYMBOLS, SatDeployError, ColoredGroup
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
+from satdeploy.templates import render_service_template, compute_service_hash
 
 
 def get_history(config_dir: Path) -> History:
@@ -131,7 +132,8 @@ def stop_services(
     """Stop services in order with progress output."""
     for svc_app, svc_name in services:
         counter.next(f"Stopping {svc_app} ({svc_name})")
-        service_manager.stop(svc_name)
+        if not service_manager.stop(svc_name):
+            click.echo(warning(f"Service {svc_name} not found - skipping stop"))
 
 
 def start_services(
@@ -142,11 +144,70 @@ def start_services(
     """Start services in reverse order with health checks."""
     for svc_app, svc_name in reversed(services):
         counter.next(f"Starting {svc_app} ({svc_name})")
-        service_manager.start(svc_name)
+        if not service_manager.start(svc_name):
+            click.echo(warning(f"Service {svc_name} not found - skipping start"))
+            continue
         if service_manager.is_healthy(svc_name):
             click.echo(success(f"Health check passed for {svc_app}"))
         else:
             click.echo(warning(f"Health check failed for {svc_app}"))
+
+
+def sync_service_file(
+    ssh: SSHClient,
+    service_manager: ServiceManager,
+    app_config: AppConfig,
+    module_config: ModuleConfig,
+    counter: StepCounter | None = None,
+) -> str | None:
+    """Sync service file to remote if needed.
+
+    Renders the service template, compares with remote, and uploads if different.
+
+    Args:
+        ssh: The SSH client.
+        service_manager: The service manager.
+        app_config: The app configuration with service_template.
+        module_config: The module configuration for template rendering.
+        counter: Optional step counter for progress output.
+
+    Returns:
+        The service hash if synced, None if no template defined.
+    """
+    if not app_config.service_template or not app_config.service:
+        return None
+
+    # Render template with module values
+    rendered = render_service_template(app_config.service_template, module_config)
+    local_hash = compute_service_hash(rendered)
+
+    # Check remote service file
+    service_path = f"/etc/systemd/system/{app_config.service}"
+    remote_content = ssh.read_file(service_path)
+
+    needs_sync = True
+    if remote_content is not None:
+        remote_hash = compute_service_hash(remote_content)
+        needs_sync = local_hash != remote_hash
+
+    if counter:
+        counter.next(f"Syncing service file ({app_config.service})")
+
+    if not needs_sync:
+        click.echo(f"                Service file unchanged")
+        return local_hash
+
+    # Service file missing or changed - upload it
+    ssh.write_file_sudo(service_path, rendered)
+    service_manager.daemon_reload()
+    service_manager.enable(app_config.service)
+
+    if remote_content is None:
+        click.echo(success(f"Service file created"))
+    else:
+        click.echo(success(f"Service file updated"))
+
+    return local_hash
 
 
 @click.group(cls=ColoredGroup)
@@ -174,17 +235,28 @@ def init(config_dir: Path | None):
 
     click.echo(click.style("Setting up satdeploy configuration...", bold=True))
     click.echo("")
-    host = click.prompt("Target host (IP or hostname)")
-    user = click.prompt("Target user", default="root")
+
+    modules = {}
+    while True:
+        module_name = click.prompt("Module name", default="default" if not modules else None)
+        host = click.prompt(f"  {module_name} host (IP or hostname)")
+        user = click.prompt(f"  {module_name} user", default="root")
+        modules[module_name] = {"host": host, "user": user}
+        click.echo("")
+        if not click.confirm("Add another module?", default=False):
+            break
 
     data = {
-        "target": {
-            "host": host,
-            "user": user,
-        },
+        "modules": modules,
         "backup_dir": "/opt/satdeploy/backups",
         "max_backups": 10,
-        "apps": {},
+        "apps": {
+            "example_app": {
+                "local": "/path/to/local/binary",
+                "remote": "/path/to/remote/binary",
+                "service": None,
+            },
+        },
     }
 
     config.save(data)
@@ -193,7 +265,10 @@ def init(config_dir: Path | None):
 
 
 @main.command()
-@click.argument("app")
+@click.argument("apps", nargs=-1)
+@click.option("--all", "all_apps", is_flag=True, help="Deploy all apps")
+@click.option("--module", "-m", required=True, help="Target module")
+@click.option("--clean-vmem", is_flag=True, help="Clear vmem for deployed apps")
 @click.option(
     "--local",
     type=click.Path(exists=False),
@@ -206,10 +281,17 @@ def init(config_dir: Path | None):
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def push(app: str, local: str | None, config_dir: Path | None):
-    """Deploy a binary to the target.
+def push(
+    apps: tuple[str, ...],
+    all_apps: bool,
+    module: str,
+    clean_vmem: bool,
+    local: str | None,
+    config_dir: Path | None,
+):
+    """Deploy one or more apps to a module.
 
-    APP is the name of the application to deploy (as defined in config.yaml).
+    APPS are the names of the applications to deploy.
     """
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     config = Config(config_dir=config_dir)
@@ -219,18 +301,36 @@ def push(app: str, local: str | None, config_dir: Path | None):
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    app_config = get_app_config_or_error(config, app)
+    # Handle --all vs app list
+    if not apps and not all_apps:
+        raise SatDeployError("Specify app names or use --all")
+    if apps and all_apps:
+        raise SatDeployError("Cannot use both app names and --all")
 
-    local_path = os.path.expanduser(local or app_config.local)
-    remote_path = app_config.remote
-    service = app_config.service
+    if all_apps:
+        apps = tuple(config.get_all_app_names())
+        if not apps:
+            raise SatDeployError("No apps configured")
 
-    if not os.path.exists(local_path):
-        raise SatDeployError(f"Local file not found: {local_path}")
+    # Get target module
+    try:
+        module_config = config.get_module(module)
+        target = {"host": module_config.host, "user": module_config.user}
+    except KeyError:
+        raise SatDeployError(f"Module '{module}' not found in config")
 
-    target = config.target
+    # Only allow single app when using --local override
+    if local and len(apps) > 1:
+        raise SatDeployError("--local can only be used with a single app")
+
+    # Validate all apps exist and have local files
+    for app_name in apps:
+        app_cfg = get_app_config_or_error(config, app_name)
+        local_path_check = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
+        if not os.path.exists(local_path_check):
+            raise SatDeployError(f"Local file not found: {local_path_check}")
+
     history = get_history(config_dir)
-    binary_hash = None
 
     click.echo(f"Connecting to {target['host']}...")
 
@@ -243,102 +343,130 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 max_backups=config.max_backups,
             )
 
-            services_to_manage = get_services_to_manage(config, app, service)
+            # Deploy each app
+            for app in apps:
+                app_config = get_app_config_or_error(config, app)
+                local_path = os.path.expanduser(local or app_config.local) if len(apps) == 1 else os.path.expanduser(app_config.local)
+                remote_path = app_config.remote
+                service = app_config.service
 
-            # Check if local and remote are the same - skip if already deployed
-            local_hash = deployer.compute_hash(local_path)
-            remote_hash = deployer.compute_remote_hash(remote_path)
+                services_to_manage = get_services_to_manage(config, app, service)
 
-            if local_hash and remote_hash and local_hash == remote_hash:
-                # Still record in history so it becomes the "current" version
-                history.record(DeploymentRecord(
-                    app=app,
-                    binary_hash=local_hash,
-                    remote_path=remote_path,
-                    action="push",
-                    success=True,
-                ))
-                click.echo(warning(f"{app} ({local_hash}) is already deployed. Marked as current."))
-                return
+                # Check if local and remote are the same - skip if already deployed
+                local_hash = deployer.compute_hash(local_path)
+                remote_hash = deployer.compute_remote_hash(remote_path)
 
-            # Check if local version already exists in backups - restore instead of upload
-            existing_backups = deployer.list_backups(app)
-            existing_hashes = {b.get("hash"): b for b in existing_backups if b.get("hash")}
+                if local_hash and remote_hash and local_hash == remote_hash:
+                    # Binary already deployed, but check if service file needs updating
+                    service_hash = sync_service_file(
+                        ssh, service_manager, app_config, module_config
+                    )
+                    # Still record in history so it becomes the "current" version
+                    history.record(DeploymentRecord(
+                        module=module,
+                        app=app,
+                        binary_hash=local_hash,
+                        remote_path=remote_path,
+                        action="push",
+                        success=True,
+                        service_hash=service_hash,
+                    ))
+                    click.echo(warning(f"{app} ({local_hash}) is already deployed. Marked as current."))
+                    continue
 
-            local_in_backups = local_hash in existing_hashes
-            remote_needs_backup = remote_hash and remote_hash not in existing_hashes
+                # Check if local version already exists in backups - restore instead of upload
+                existing_backups = deployer.list_backups(app)
+                existing_hashes = {b.get("hash"): b for b in existing_backups if b.get("hash")}
 
-            if local_in_backups:
-                # Version exists in backups - restore it instead of uploading
-                backup = existing_hashes[local_hash]
-                backup_path = backup["path"]
+                local_in_backups = local_hash in existing_hashes
+                remote_needs_backup = remote_hash and remote_hash not in existing_hashes
 
-                total_steps = (1 if remote_needs_backup else 0) + 1 + len(services_to_manage) * 2
+                if local_in_backups:
+                    # Version exists in backups - restore it instead of uploading
+                    backup = existing_hashes[local_hash]
+                    backup_path = backup["path"]
+
+                    has_service_template = bool(app_config.service_template)
+                    total_steps = (1 if remote_needs_backup else 0) + 1 + (1 if has_service_template else 0) + len(services_to_manage) * 2
+                    counter = StepCounter(total_steps)
+
+                    click.echo(f"Restoring {app} from backup...")
+
+                    stop_services(service_manager, services_to_manage, counter)
+
+                    if remote_needs_backup:
+                        remote_target = f"{target['user']}@{target['host']}:{remote_path}"
+                        counter.next(f"Backing up {remote_target}")
+                        deployer.backup(app, remote_path)
+
+                    counter.next(f"Restoring {local_hash} from backup")
+                    deployer.restore(backup_path, remote_path)
+
+                    service_hash = sync_service_file(
+                        ssh, service_manager, app_config, module_config, counter
+                    )
+
+                    start_services(service_manager, services_to_manage, counter)
+
+                    history.record(DeploymentRecord(
+                        module=module,
+                        app=app,
+                        binary_hash=local_hash,
+                        remote_path=remote_path,
+                        backup_path=backup_path,
+                        action="push",
+                        success=True,
+                        service_hash=service_hash,
+                    ))
+                    click.echo(warning(f"{app} ({local_hash}) restored from backup. Marked as current."))
+                    continue
+
+                # Fresh deploy - upload new binary
+                has_service_template = bool(app_config.service_template)
+                total_steps = (1 if remote_needs_backup else 0) + 1 + (1 if has_service_template else 0) + len(services_to_manage) * 2
                 counter = StepCounter(total_steps)
 
-                click.echo(f"Restoring {app} from backup...")
+                click.echo(f"Deploying {app}...")
 
                 stop_services(service_manager, services_to_manage, counter)
 
-                if remote_needs_backup:
-                    remote_target = f"{target['user']}@{target['host']}:{remote_path}"
-                    counter.next(f"Backing up {remote_target}")
-                    deployer.backup(app, remote_path)
+                remote_target = f"{target['user']}@{target['host']}:{remote_path}"
+                backup_path = None
 
-                counter.next(f"Restoring {local_hash} from backup")
-                deployer.restore(backup_path, remote_path)
+                if remote_needs_backup:
+                    counter.next(f"Backing up {remote_target}")
+                    backup_path = deployer.backup(app, remote_path)
+
+                counter.next(f"Uploading {local_path}")
+                click.echo(f"                {SYMBOLS['arrow']} {remote_target}")
+                deployer.deploy(local_path, remote_path)
+
+                service_hash = sync_service_file(
+                    ssh, service_manager, app_config, module_config, counter
+                )
 
                 start_services(service_manager, services_to_manage, counter)
 
                 history.record(DeploymentRecord(
+                    module=module,
                     app=app,
                     binary_hash=local_hash,
                     remote_path=remote_path,
                     backup_path=backup_path,
                     action="push",
                     success=True,
+                    service_hash=service_hash,
                 ))
-                click.echo(warning(f"{app} ({local_hash}) restored from backup. Marked as current."))
-                return
 
-            # Fresh deploy - upload new binary
-            total_steps = (1 if remote_needs_backup else 0) + 1 + len(services_to_manage) * 2
-            counter = StepCounter(total_steps)
-
-            click.echo(f"Deploying {app}...")
-
-            stop_services(service_manager, services_to_manage, counter)
-
-            remote_target = f"{target['user']}@{target['host']}:{remote_path}"
-            backup_path = None
-
-            if remote_needs_backup:
-                counter.next(f"Backing up {remote_target}")
-                backup_path = deployer.backup(app, remote_path)
-
-            counter.next(f"Uploading {local_path}")
-            click.echo(f"                {SYMBOLS['arrow']} {remote_target}")
-            deployer.deploy(local_path, remote_path)
-
-            start_services(service_manager, services_to_manage, counter)
-
-            history.record(DeploymentRecord(
-                app=app,
-                binary_hash=local_hash,
-                remote_path=remote_path,
-                backup_path=backup_path,
-                action="push",
-                success=True,
-            ))
-
-            click.echo(success(f"Deployed {app} ({local_hash})"))
+                click.echo(success(f"Deployed {app} ({local_hash})"))
 
     except SSHError as e:
         # Log failed deployment
         history.record(DeploymentRecord(
-            app=app,
-            binary_hash=binary_hash or "",
-            remote_path=remote_path,
+            module=module,
+            app=apps[0] if apps else "",
+            binary_hash="",
+            remote_path="",
             action="push",
             success=False,
             error_message=str(e),
@@ -347,13 +475,14 @@ def push(app: str, local: str | None, config_dir: Path | None):
 
 
 @main.command()
+@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def status(config_dir: Path | None):
+def status(module: str, config_dir: Path | None):
     """Show status of deployed apps and services."""
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     config = Config(config_dir=config_dir)
@@ -363,7 +492,11 @@ def status(config_dir: Path | None):
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    target = config.target
+    try:
+        module_config = config.get_module(module)
+        target = {"host": module_config.host, "user": module_config.user}
+    except KeyError:
+        raise SatDeployError(f"Module '{module}' not found in config")
     apps = config.apps
     history = get_history(config_dir)
 
@@ -447,13 +580,14 @@ def status(config_dir: Path | None):
 
 @main.command("list")
 @click.argument("app")
+@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def list_backups(app: str, config_dir: Path | None):
+def list_backups(app: str, module: str, config_dir: Path | None):
     """List all versions of an app (deployed + backups).
 
     APP is the name of the application to list versions for.
@@ -471,7 +605,11 @@ def list_backups(app: str, config_dir: Path | None):
 
     app_config = get_app_config_or_error(config, app)
 
-    target = config.target
+    try:
+        module_config = config.get_module(module)
+        target = {"host": module_config.host, "user": module_config.user}
+    except KeyError:
+        raise SatDeployError(f"Module '{module}' not found in config")
     history = get_history(config_dir)
 
     # Get currently deployed version from history
@@ -549,13 +687,14 @@ def list_backups(app: str, config_dir: Path | None):
 @main.command()
 @click.argument("app")
 @click.argument("hash", required=False, default=None)
+@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
+def rollback(app: str, hash: str | None, module: str, config_dir: Path | None):  # noqa: A002
     """Rollback to a previous version.
 
     APP is the name of the application to rollback.
@@ -574,7 +713,11 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
 
     remote_path = app_config.remote
     service = app_config.service
-    target = config.target
+    try:
+        module_config = config.get_module(module)
+        target = {"host": module_config.host, "user": module_config.user}
+    except KeyError:
+        raise SatDeployError(f"Module '{module}' not found in config")
     history = get_history(config_dir)
     backup_path = None
 
@@ -696,6 +839,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
 
 @main.command()
 @click.argument("app")
+@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--lines",
     "-n",
@@ -709,7 +853,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def logs(app: str, lines: int, config_dir: Path | None):
+def logs(app: str, module: str, lines: int, config_dir: Path | None):
     """Show logs for an app's service.
 
     APP is the name of the application to show logs for.
@@ -730,7 +874,11 @@ def logs(app: str, lines: int, config_dir: Path | None):
             f"App '{app}' is a library and has no service. Cannot show logs."
         )
 
-    target = config.target
+    try:
+        module_config = config.get_module(module)
+        target = {"host": module_config.host, "user": module_config.user}
+    except KeyError:
+        raise SatDeployError(f"Module '{module}' not found in config")
 
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
@@ -742,3 +890,179 @@ def logs(app: str, lines: int, config_dir: Path | None):
 
     except SSHError as e:
         raise SatDeployError(str(e))
+
+
+@main.group(cls=ColoredGroup)
+def fleet():
+    """Fleet management commands."""
+    pass
+
+
+def check_module_online(host: str, user: str) -> bool:
+    """Check if a module is reachable via SSH.
+
+    Args:
+        host: The module's hostname or IP.
+        user: The SSH user.
+
+    Returns:
+        True if module is reachable, False otherwise.
+    """
+    try:
+        with SSHClient(host=host, user=user) as ssh:
+            return True
+    except SSHError:
+        return False
+
+
+@fleet.command("status")
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def fleet_status(config_dir: Path | None):
+    """Show status of all modules."""
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise SatDeployError(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    modules = config.get_modules()
+
+    if not modules:
+        click.echo("No modules configured.")
+        return
+
+    click.echo(click.style("Fleet Status", bold=True))
+    click.echo("")
+
+    for module_name, module in modules.items():
+        online = check_module_online(module.host, module.user)
+
+        if online:
+            status_symbol = click.style(SYMBOLS["check"], fg="green")
+            status_text = click.style("online", fg="green")
+        else:
+            status_symbol = click.style(SYMBOLS["cross"], fg="red")
+            status_text = click.style("offline", fg="red")
+
+        click.echo(f"  {status_symbol} {module_name:<12} {status_text}")
+
+
+@main.command()
+@click.argument("module1")
+@click.argument("module2")
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def diff(module1: str, module2: str, config_dir: Path | None):
+    """Compare two modules.
+
+    MODULE1 and MODULE2 are the names of the modules to compare.
+    """
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise SatDeployError(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    history = get_history(config_dir)
+    state1 = history.get_module_state(module1)
+    state2 = history.get_module_state(module2)
+
+    all_apps = set(state1.keys()) | set(state2.keys())
+
+    if not all_apps:
+        click.echo("No deployment history for either module.")
+        return
+
+    click.echo(click.style(f"Comparing {module1} vs {module2}", bold=True))
+    click.echo("")
+
+    # Header
+    header = f"    {'APP':<16} {module1:<12} {module2:<12} {'STATUS'}"
+    click.echo(click.style(header, fg="bright_black"))
+    click.echo(click.style("    " + "-" * 50, fg="bright_black"))
+
+    for app_name in sorted(all_apps):
+        hash1 = state1[app_name].binary_hash if app_name in state1 else "-"
+        hash2 = state2[app_name].binary_hash if app_name in state2 else "-"
+
+        if hash1 == hash2:
+            symbol = click.style(SYMBOLS["check"], fg="green")
+            status = click.style("match", fg="green")
+        else:
+            symbol = click.style(SYMBOLS["cross"], fg="yellow")
+            status = click.style("differs", fg="yellow")
+
+        click.echo(f"  {symbol} {app_name:<16} {hash1:<12} {hash2:<12} {status}")
+
+
+@main.command()
+@click.argument("source")
+@click.argument("target")
+@click.option("--clean-vmem", is_flag=True, help="Clear vmem on target")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def sync(source: str, target: str, clean_vmem: bool, yes: bool, config_dir: Path | None):
+    """Sync target module to match source.
+
+    SOURCE is the module to sync from.
+    TARGET is the module to sync to.
+    """
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise SatDeployError(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    history = get_history(config_dir)
+
+    # Get diff to show what will be synced
+    state_source = history.get_module_state(source)
+    state_target = history.get_module_state(target)
+
+    all_apps = set(state_source.keys()) | set(state_target.keys())
+    apps_to_sync = []
+
+    for app_name in sorted(all_apps):
+        hash_source = state_source[app_name].binary_hash if app_name in state_source else None
+        hash_target = state_target[app_name].binary_hash if app_name in state_target else None
+
+        if hash_source != hash_target:
+            apps_to_sync.append(app_name)
+
+    if not apps_to_sync:
+        click.echo(f"Modules {source} and {target} are already in sync.")
+        return
+
+    click.echo(click.style(f"Syncing {target} to match {source}", bold=True))
+    click.echo("")
+    click.echo(f"Apps to sync: {', '.join(apps_to_sync)}")
+    if clean_vmem:
+        click.echo("Will also clear vmem directories.")
+    click.echo("")
+
+    if not yes:
+        if not click.confirm("Proceed?"):
+            click.echo("Aborted.")
+            return
+
+    click.echo(success(f"Sync from {source} to {target} would proceed (not yet implemented)"))
