@@ -475,3 +475,91 @@ class TestFleetStatus:
 
         status = h.get_fleet_status()
         assert status == {}
+
+
+class TestMigration:
+    """Tests for database migration from old schema."""
+
+    def test_migrate_adds_module_column(self, tmp_path):
+        """Migration adds module column to existing database."""
+        db_path = tmp_path / ".satdeploy" / "history.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create old schema (without module, service_hash, vmem_cleared)
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE deployments (
+                id INTEGER PRIMARY KEY,
+                app TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                git_hash TEXT,
+                binary_hash TEXT NOT NULL,
+                remote_path TEXT NOT NULL,
+                backup_path TEXT,
+                action TEXT NOT NULL,
+                success INTEGER NOT NULL,
+                error_message TEXT
+            )
+        """)
+        # Insert old record
+        conn.execute("""
+            INSERT INTO deployments
+            (app, timestamp, git_hash, binary_hash, remote_path, backup_path, action, success)
+            VALUES ('controller', '2024-01-01T00:00:00', NULL, 'hash123', '/path/ctrl', NULL, 'push', 1)
+        """)
+        conn.commit()
+        conn.close()
+
+        # Initialize history (should trigger migration)
+        h = History(db_path)
+        h.init_db()
+
+        # Verify migration worked
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(deployments)")
+        columns = {row[1] for row in cursor.fetchall()}
+        conn.close()
+
+        assert "module" in columns
+        assert "service_hash" in columns
+        assert "vmem_cleared" in columns
+
+    def test_migrate_sets_default_module(self, tmp_path):
+        """Migration sets existing records to module='default'."""
+        db_path = tmp_path / ".satdeploy" / "history.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create old schema and insert record
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE deployments (
+                id INTEGER PRIMARY KEY,
+                app TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                git_hash TEXT,
+                binary_hash TEXT NOT NULL,
+                remote_path TEXT NOT NULL,
+                backup_path TEXT,
+                action TEXT NOT NULL,
+                success INTEGER NOT NULL,
+                error_message TEXT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO deployments
+            (app, timestamp, git_hash, binary_hash, remote_path, backup_path, action, success)
+            VALUES ('controller', '2024-01-01T00:00:00', NULL, 'hash123', '/path/ctrl', NULL, 'push', 1)
+        """)
+        conn.commit()
+        conn.close()
+
+        # Initialize history (triggers migration)
+        h = History(db_path)
+        h.init_db()
+
+        # Verify old record has module='default'
+        records = h.get_history("controller")
+        assert len(records) == 1
+        assert records[0].module == "default"
+        assert records[0].vmem_cleared is False
+        assert records[0].service_hash is None

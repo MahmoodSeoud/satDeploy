@@ -37,25 +37,59 @@ class History:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
         conn = sqlite3.connect(self._db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS deployments (
-                id INTEGER PRIMARY KEY,
-                module TEXT NOT NULL DEFAULT 'default',
-                app TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                git_hash TEXT,
-                binary_hash TEXT NOT NULL,
-                remote_path TEXT NOT NULL,
-                backup_path TEXT,
-                action TEXT NOT NULL,
-                success INTEGER NOT NULL,
-                error_message TEXT,
-                service_hash TEXT,
-                vmem_cleared INTEGER NOT NULL DEFAULT 0
-            )
-        """)
+
+        # Check if table exists
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='deployments'"
+        )
+        table_exists = cursor.fetchone() is not None
+
+        if table_exists:
+            # Migrate existing table
+            self._migrate(conn)
+        else:
+            # Create new table
+            conn.execute("""
+                CREATE TABLE deployments (
+                    id INTEGER PRIMARY KEY,
+                    module TEXT NOT NULL DEFAULT 'default',
+                    app TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    git_hash TEXT,
+                    binary_hash TEXT NOT NULL,
+                    remote_path TEXT NOT NULL,
+                    backup_path TEXT,
+                    action TEXT NOT NULL,
+                    success INTEGER NOT NULL,
+                    error_message TEXT,
+                    service_hash TEXT,
+                    vmem_cleared INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+
         conn.commit()
         conn.close()
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Migrate existing database to current schema."""
+        cursor = conn.execute("PRAGMA table_info(deployments)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        # Add module column if missing
+        if "module" not in columns:
+            conn.execute(
+                "ALTER TABLE deployments ADD COLUMN module TEXT NOT NULL DEFAULT 'default'"
+            )
+
+        # Add service_hash column if missing
+        if "service_hash" not in columns:
+            conn.execute("ALTER TABLE deployments ADD COLUMN service_hash TEXT")
+
+        # Add vmem_cleared column if missing
+        if "vmem_cleared" not in columns:
+            conn.execute(
+                "ALTER TABLE deployments ADD COLUMN vmem_cleared INTEGER NOT NULL DEFAULT 0"
+            )
 
     def record(self, record: DeploymentRecord) -> None:
         """Record a deployment operation.
