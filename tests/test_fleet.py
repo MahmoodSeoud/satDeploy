@@ -222,3 +222,130 @@ class TestGetStatus:
 
         assert "controller" in status["som1"]["apps"]
         assert status["som1"]["apps"]["controller"]["hash"] == "live1234"
+
+
+class TestDiffModules:
+    """Tests for FleetManager.diff_modules()."""
+
+    def test_diff_modules_returns_dict_keyed_by_app(self):
+        """diff_modules should return dict keyed by app name."""
+        config = Mock()
+        history = Mock()
+        history.get_module_state.side_effect = lambda m: {
+            "som1": {"controller": DeploymentRecord(
+                module="som1", app="controller", binary_hash="abc12345",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+            "som2": {"controller": DeploymentRecord(
+                module="som2", app="controller", binary_hash="abc12345",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+        }[m]
+
+        deployer = Mock()
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        diff = fleet.diff_modules("som1", "som2")
+
+        assert isinstance(diff, dict)
+        assert "controller" in diff
+
+    def test_diff_modules_includes_hashes_for_both_modules(self):
+        """diff_modules should include hash for each module."""
+        config = Mock()
+        history = Mock()
+        history.get_module_state.side_effect = lambda m: {
+            "som1": {"controller": DeploymentRecord(
+                module="som1", app="controller", binary_hash="hash_som1",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+            "som2": {"controller": DeploymentRecord(
+                module="som2", app="controller", binary_hash="hash_som2",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+        }[m]
+
+        deployer = Mock()
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        diff = fleet.diff_modules("som1", "som2")
+
+        assert diff["controller"]["som1"] == "hash_som1"
+        assert diff["controller"]["som2"] == "hash_som2"
+
+    def test_diff_modules_match_true_when_hashes_equal(self):
+        """diff_modules match should be True when hashes are equal."""
+        config = Mock()
+        history = Mock()
+        history.get_module_state.side_effect = lambda m: {
+            "som1": {"controller": DeploymentRecord(
+                module="som1", app="controller", binary_hash="same_hash",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+            "som2": {"controller": DeploymentRecord(
+                module="som2", app="controller", binary_hash="same_hash",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+        }[m]
+
+        deployer = Mock()
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        diff = fleet.diff_modules("som1", "som2")
+
+        assert diff["controller"]["match"] is True
+
+    def test_diff_modules_match_false_when_hashes_differ(self):
+        """diff_modules match should be False when hashes differ."""
+        config = Mock()
+        history = Mock()
+        history.get_module_state.side_effect = lambda m: {
+            "som1": {"controller": DeploymentRecord(
+                module="som1", app="controller", binary_hash="hash_v1",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+            "som2": {"controller": DeploymentRecord(
+                module="som2", app="controller", binary_hash="hash_v2",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+        }[m]
+
+        deployer = Mock()
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        diff = fleet.diff_modules("som1", "som2")
+
+        assert diff["controller"]["match"] is False
+
+    def test_diff_modules_handles_app_on_one_module_only(self):
+        """diff_modules should handle app deployed to only one module."""
+        config = Mock()
+        history = Mock()
+        history.get_module_state.side_effect = lambda m: {
+            "som1": {
+                "controller": DeploymentRecord(
+                    module="som1", app="controller", binary_hash="ctrl_hash",
+                    remote_path="/usr/bin/controller", action="push", success=True,
+                ),
+                "unique_app": DeploymentRecord(
+                    module="som1", app="unique_app", binary_hash="unique_hash",
+                    remote_path="/usr/bin/unique_app", action="push", success=True,
+                ),
+            },
+            "som2": {
+                "controller": DeploymentRecord(
+                    module="som2", app="controller", binary_hash="ctrl_hash",
+                    remote_path="/usr/bin/controller", action="push", success=True,
+                ),
+            },
+        }[m]
+
+        deployer = Mock()
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        diff = fleet.diff_modules("som1", "som2")
+
+        assert "unique_app" in diff
+        assert diff["unique_app"]["som1"] == "unique_hash"
+        assert diff["unique_app"]["som2"] is None
+        assert diff["unique_app"]["match"] is False

@@ -45,3 +45,30 @@ class FleetManager:
 
             result[name] = {"online": online, "apps": apps}
         return result
+
+    def diff_modules(self, module1: str, module2: str) -> dict:
+        """Compare two modules and return differences.
+
+        Args:
+            module1: First module name.
+            module2: Second module name.
+
+        Returns:
+            Dict mapping app_name to {module1: hash, module2: hash, match: bool}.
+        """
+        state1 = self.history.get_module_state(module1)
+        state2 = self.history.get_module_state(module2)
+
+        all_apps = set(state1.keys()) | set(state2.keys())
+        result = {}
+
+        for app_name in all_apps:
+            hash1 = state1[app_name].binary_hash if app_name in state1 else None
+            hash2 = state2[app_name].binary_hash if app_name in state2 else None
+            result[app_name] = {
+                module1: hash1,
+                module2: hash2,
+                "match": hash1 == hash2,
+            }
+
+        return result
