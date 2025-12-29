@@ -146,3 +146,46 @@ class Config:
         if self._data is None:
             return 10
         return self._data.get("max_backups", 10)
+
+    def get_modules(self) -> dict[str, ModuleConfig]:
+        """Get all configured modules.
+
+        Returns:
+            Dictionary mapping module names to ModuleConfig objects.
+        """
+        if self._data is None:
+            return {}
+
+        modules_data = self._data.get("modules", {})
+        appsys = self._data.get("appsys", {})
+
+        result = {}
+        for name, mod in modules_data.items():
+            result[name] = ModuleConfig(
+                name=name,
+                host=mod["host"],
+                user=mod["user"],
+                csp_addr=mod["csp_addr"],
+                netmask=appsys.get("netmask", 0),
+                interface=appsys.get("interface", 0),
+                baudrate=appsys.get("baudrate", 0),
+                vmem_path=appsys.get("vmem_path", ""),
+            )
+        return result
+
+    def get_module(self, name: str) -> ModuleConfig:
+        """Get configuration for a specific module.
+
+        Args:
+            name: The module name.
+
+        Returns:
+            ModuleConfig with module and inherited appsys settings.
+
+        Raises:
+            KeyError: If module name is not found.
+        """
+        modules = self.get_modules()
+        if name not in modules:
+            raise KeyError(f"Module '{name}' not found")
+        return modules[name]

@@ -241,3 +241,103 @@ class TestAppConfig:
         assert app.service is None
         assert app.service_template is None
         assert app.vmem_dir is None
+
+
+class TestGetModules:
+    """Test get_modules() and get_module() methods."""
+
+    def test_get_modules_returns_all_modules(self, tmp_path):
+        """get_modules() should return all configured modules."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {
+                "som1": {
+                    "host": "192.168.1.10",
+                    "user": "root",
+                    "csp_addr": 5421,
+                },
+                "som2": {
+                    "host": "192.168.1.11",
+                    "user": "root",
+                    "csp_addr": 5475,
+                },
+            },
+            "appsys": {
+                "netmask": 8,
+                "interface": 0,
+                "baudrate": 100000,
+                "vmem_path": "/home/root/a53vmem",
+            },
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        modules = config.get_modules()
+
+        assert len(modules) == 2
+        assert "som1" in modules
+        assert "som2" in modules
+        assert isinstance(modules["som1"], ModuleConfig)
+
+    def test_get_module_returns_module_with_appsys_settings(self, tmp_path):
+        """get_module() should return ModuleConfig with inherited appsys settings."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {
+                "som1": {
+                    "host": "192.168.1.10",
+                    "user": "root",
+                    "csp_addr": 5421,
+                },
+            },
+            "appsys": {
+                "netmask": 8,
+                "interface": 0,
+                "baudrate": 100000,
+                "vmem_path": "/home/root/a53vmem",
+            },
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        module = config.get_module("som1")
+
+        assert module.name == "som1"
+        assert module.host == "192.168.1.10"
+        assert module.user == "root"
+        assert module.csp_addr == 5421
+        assert module.netmask == 8
+        assert module.interface == 0
+        assert module.baudrate == 100000
+        assert module.vmem_path == "/home/root/a53vmem"
+
+    def test_get_module_unknown_raises_keyerror(self, tmp_path):
+        """get_module() should raise KeyError for unknown module."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {
+                "som1": {
+                    "host": "192.168.1.10",
+                    "user": "root",
+                    "csp_addr": 5421,
+                },
+            },
+            "appsys": {
+                "netmask": 8,
+                "interface": 0,
+                "baudrate": 100000,
+                "vmem_path": "/home/root/a53vmem",
+            },
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+
+        with pytest.raises(KeyError):
+            config.get_module("unknown")
