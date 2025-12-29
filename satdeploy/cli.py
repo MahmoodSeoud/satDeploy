@@ -742,3 +742,29 @@ def logs(app: str, lines: int, config_dir: Path | None):
 
     except SSHError as e:
         raise SatDeployError(str(e))
+
+
+@main.group(cls=ColoredGroup)
+def fleet():
+    """Fleet management commands."""
+    pass
+
+
+@fleet.command()
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def status(config_dir: Path | None):
+    """Show status of all modules."""
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise SatDeployError(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    click.echo("Fleet status placeholder")
