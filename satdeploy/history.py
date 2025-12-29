@@ -40,6 +40,7 @@ class History:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS deployments (
                 id INTEGER PRIMARY KEY,
+                module TEXT NOT NULL DEFAULT 'default',
                 app TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
                 git_hash TEXT,
@@ -48,7 +49,9 @@ class History:
                 backup_path TEXT,
                 action TEXT NOT NULL,
                 success INTEGER NOT NULL,
-                error_message TEXT
+                error_message TEXT,
+                service_hash TEXT,
+                vmem_cleared INTEGER NOT NULL DEFAULT 0
             )
         """)
         conn.commit()
