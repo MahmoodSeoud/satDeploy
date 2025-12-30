@@ -7,6 +7,7 @@ from satdeploy.transport.base import (
     AppStatus,
     BackupInfo,
 )
+from satdeploy.transport.ssh import SSHTransport
 
 __all__ = [
     "Transport",
@@ -14,4 +15,5 @@ __all__ = [
     "DeployResult",
     "AppStatus",
     "BackupInfo",
+    "SSHTransport",
 ]
