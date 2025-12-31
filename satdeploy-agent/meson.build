@@ -24,10 +24,12 @@ project(
 
 sources = files(
 	'src/main.c',
+	'proto/deploy.pb-c.c',
 )
 
 dirs = include_directories(
 	'include',
+	'proto',
 )
 
 csp_dep = dependency('csp', fallback: ['csp', 'csp_dep'])
