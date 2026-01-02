@@ -28,6 +28,7 @@ satdeploy_apm = shared_library(
       'src/satdeploy_apm.c',
       'src/deploy.pb-c.c',
       'src/config.c',
+      'src/output.c',
     ],
     include_directories: includes,
     dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, openssl_dep],

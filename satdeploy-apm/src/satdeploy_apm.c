@@ -22,6 +22,7 @@
 
 #include "deploy.pb-c.h"
 #include "config.h"
+#include "output.h"
 
 #define SATDEPLOY_PORT 20
 #define DEFAULT_TIMEOUT 10000
@@ -126,8 +127,6 @@ static int satdeploy_status_cmd(struct slash *slash)
         }
     }
 
-    printf("Querying agent at node %u...\n", node);
-
     Satdeploy__DeployRequest req = SATDEPLOY__DEPLOY_REQUEST__INIT;
     req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_STATUS;
 
@@ -137,20 +136,36 @@ static int satdeploy_status_cmd(struct slash *slash)
     }
 
     if (!resp->success) {
-        printf("Error: %s\n", resp->error_message);
+        output_error(resp->error_message);
         satdeploy__deploy_response__free_unpacked(resp, NULL);
         return SLASH_EIO;
     }
 
-    printf("Agent status: OK\n");
-    printf("Deployed apps: %zu\n", resp->n_apps);
+    /* Print formatted status table */
+    printf("Target: node %u\n\n", node);
+
+    if (resp->n_apps == 0) {
+        printf("No apps deployed.\n");
+        satdeploy__deploy_response__free_unpacked(resp, NULL);
+        return SLASH_SUCCESS;
+    }
+
+    output_status_header();
+    output_separator(60);
+
     for (size_t i = 0; i < resp->n_apps; i++) {
         Satdeploy__AppStatusEntry *app = resp->apps[i];
-        printf("  %s: %s [%s] @ %s\n",
-               app->app_name,
-               app->running ? "running" : "stopped",
-               app->binary_hash,
-               app->remote_path);
+        const char *status = app->running ? "running" : "stopped";
+        int has_service = 1;  /* Assume all apps have services for now */
+
+        output_status_row(
+            app->app_name,
+            status,
+            app->binary_hash,
+            app->remote_path,
+            app->running,
+            has_service
+        );
     }
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
@@ -337,15 +352,14 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     }
 
     if (!resp->success) {
-        printf("Deploy failed: %s (code %u)\n", resp->error_message, resp->error_code);
+        output_error(resp->error_message);
         satdeploy__deploy_response__free_unpacked(resp, NULL);
         return SLASH_EIO;
     }
 
-    printf("Deploy successful!\n");
-    if (resp->backup_path && strlen(resp->backup_path) > 0) {
-        printf("Backup created: %s\n", resp->backup_path);
-    }
+    char success_msg[256];
+    snprintf(success_msg, sizeof(success_msg), "Deployed %s (%s)", app_name, checksum);
+    output_success(success_msg);
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
     return SLASH_SUCCESS;
@@ -399,8 +413,9 @@ static int satdeploy_rollback_cmd(struct slash *slash)
     }
 
     if (!remote_path || !remote_path[0]) {
-        printf("Error: No remote_path configured for '%s'\n", app_name);
-        printf("Config has %d apps\n", config ? config->num_apps : -1);
+        char errmsg[256];
+        snprintf(errmsg, sizeof(errmsg), "No remote_path configured for '%s'", app_name);
+        output_error(errmsg);
         printf("Add it to ~/.satdeploy/config.yaml under apps/%s/remote\n", app_name);
         return SLASH_EINVAL;
     }
@@ -419,12 +434,14 @@ static int satdeploy_rollback_cmd(struct slash *slash)
     }
 
     if (!resp->success) {
-        printf("Rollback failed: %s (code %u)\n", resp->error_message, resp->error_code);
+        output_error(resp->error_message);
         satdeploy__deploy_response__free_unpacked(resp, NULL);
         return SLASH_EIO;
     }
 
-    printf("Rollback successful!\n");
+    char success_msg[256];
+    snprintf(success_msg, sizeof(success_msg), "Rolled back %s", app_name);
+    output_success(success_msg);
     satdeploy__deploy_response__free_unpacked(resp, NULL);
     return SLASH_SUCCESS;
 }
@@ -463,8 +480,27 @@ static int satdeploy_list_cmd(struct slash *slash)
         }
     }
 
-    printf("Querying backups for '%s' on node %u...\n", app_name, node);
+    /* First, query status to get currently deployed hash */
+    Satdeploy__DeployRequest status_req = SATDEPLOY__DEPLOY_REQUEST__INIT;
+    status_req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_STATUS;
 
+    Satdeploy__DeployResponse *status_resp = NULL;
+    char current_hash[32] = {0};
+
+    if (send_deploy_request(node, &status_req, &status_resp) == 0 && status_resp->success) {
+        /* Find the app in status and get its current hash */
+        for (size_t i = 0; i < status_resp->n_apps; i++) {
+            if (strcmp(status_resp->apps[i]->app_name, app_name) == 0) {
+                if (status_resp->apps[i]->binary_hash) {
+                    strncpy(current_hash, status_resp->apps[i]->binary_hash, sizeof(current_hash) - 1);
+                }
+                break;
+            }
+        }
+        satdeploy__deploy_response__free_unpacked(status_resp, NULL);
+    }
+
+    /* Now query backups */
     Satdeploy__DeployRequest req = SATDEPLOY__DEPLOY_REQUEST__INIT;
     req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_LIST_VERSIONS;
     req.app_name = app_name;
@@ -475,22 +511,32 @@ static int satdeploy_list_cmd(struct slash *slash)
     }
 
     if (!resp->success) {
-        printf("Error: %s\n", resp->error_message);
+        output_error(resp->error_message);
         satdeploy__deploy_response__free_unpacked(resp, NULL);
         return SLASH_EIO;
     }
 
-    printf("Backups for %s: %zu\n", app_name, resp->n_backups);
-    for (size_t i = 0; i < resp->n_backups; i++) {
-        Satdeploy__BackupEntry *backup = resp->backups[i];
-        printf("  [%zu] %s\n", i + 1, backup->version);
-        printf("      Timestamp: %s\n", backup->timestamp);
-        printf("      Hash: %s\n", backup->hash);
-        printf("      Path: %s\n", backup->path);
-    }
+    /* Print formatted version table */
+    char title[128];
+    snprintf(title, sizeof(title), "Versions for %s:", app_name);
+    output_title(title);
+    printf("\n");
 
     if (resp->n_backups == 0) {
-        printf("  (no backups found)\n");
+        printf("No versions found.\n");
+        satdeploy__deploy_response__free_unpacked(resp, NULL);
+        return SLASH_SUCCESS;
+    }
+
+    output_versions_header();
+    output_separator(45);
+
+    for (size_t i = 0; i < resp->n_backups; i++) {
+        Satdeploy__BackupEntry *backup = resp->backups[i];
+        int is_deployed = (current_hash[0] && backup->hash &&
+                          strcmp(current_hash, backup->hash) == 0);
+
+        output_version_row(backup->hash, backup->timestamp, is_deployed);
     }
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
