@@ -1,45 +1,37 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working with this repository.
 
 ## Project Overview
 
-sat-deploy is a deployment system for embedded Linux targets (satellites) via CSP/csh. It consists of:
+**satdeploy** is a deployment system for embedded Linux targets (satellites) with versioned backups, dependency-aware service management, and one-command rollback. It supports both SSH and CSP (Cubesat Space Protocol) transports.
 
-- **satdeploy** (Python CLI) - Ground station tool for SSH-based deployment
-- **satdeploy-agent** (C) - Runs on ARM target, handles deploy/rollback/status via CSP
-- **satdeploy-apm** (C) - csh slash commands for ground station, talks to agent via CSP
+### Components
 
-## CRITICAL: Cross-Compilation
-
-The **satdeploy-agent** runs on ARM targets (aarch64/cortex-a53). You MUST cross-compile:
-
-```bash
-# 1. Source Yocto SDK environment
-source /opt/poky/environment-setup-armv8a-poky-linux
-
-# 2. Build for ARM target
-cd satdeploy-agent
-meson setup build-arm --cross-file yocto_cross.ini
-ninja -C build-arm
-
-# The ARM binary is: build-arm/satdeploy-agent
-```
-
-**DO NOT** use the `build/` directory for deployment - that's x86 native builds for local testing only.
+| Component | Language | Purpose |
+|-----------|----------|---------|
+| **satdeploy** | Python | Ground station CLI - orchestrates deployments |
+| **satdeploy-agent** | C | Runs on ARM target - handles CSP deploy commands |
+| **satdeploy-apm** | C | csh slash commands for ground station |
 
 ## Build Commands
 
-### satdeploy-agent (ARM target)
+### satdeploy-agent (ARM cross-compile)
+
+**CRITICAL:** This runs on ARM targets. Always cross-compile:
+
 ```bash
 source /opt/poky/environment-setup-armv8a-poky-linux
 cd satdeploy-agent
-meson setup build-arm --cross-file yocto_cross.ini --wipe  # --wipe to reconfigure
+meson setup build-arm --cross-file yocto_cross.ini --wipe
 ninja -C build-arm
-# Deploy: build-arm/satdeploy-agent
+# Output: build-arm/satdeploy-agent
 ```
 
-### satdeploy-apm (Ground station csh module)
+The `build/` directory is for x86 native testing only - never deploy it.
+
+### satdeploy-apm (Ground station)
+
 ```bash
 cd satdeploy-apm
 meson setup build --wipe
@@ -47,79 +39,168 @@ ninja -C build
 # Install: cp build/libcsh_satdeploy_apm.so /root/.local/lib/csh/
 ```
 
-### Python CLI (development)
+### Python CLI
+
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 python -m pytest
 ```
 
-## CLI Usage
-
-```bash
-satdeploy init                     # Interactive setup
-satdeploy push <app>               # Deploy binary
-satdeploy status                   # Show service states
-satdeploy list <app>               # List all versions (deployed + backups)
-satdeploy rollback <app>           # Restore previous version
-satdeploy logs <app>               # Show journalctl logs
-```
-
 ## Architecture
 
-### Module Responsibilities
+### Transport Abstraction
 
-- **cli.py**: Click command handlers - orchestrates the workflow using other modules
-- **ssh.py**: SSH connection wrapper around paramiko - `SSHClient` context manager for connections
-- **deployer.py**: Backup/deploy/rollback logic - handles file operations on remote
-- **services.py**: Systemd service management - start/stop/status via SSH
-- **dependencies.py**: Topological sort for service stop/start order based on `depends_on` config
-- **history.py**: SQLite database for tracking deployments in `~/.satdeploy/history.db`
-- **config.py**: YAML config loading from `~/.satdeploy/config.yaml`
-- **output.py**: CLI output formatting (symbols, colors, step counters)
+The CLI uses a transport layer (`satdeploy/transport/`) supporting:
 
-### Deployment Flow
+- **SSH** (`ssh.py`) - Traditional SSH/SFTP for direct network access
+- **CSP** (`csp.py`) - Cubesat Space Protocol over ZMQ for satellite links
 
-When `push` is called:
-1. Load config, resolve dependencies
-2. Stop services top-down (dependents first)
-3. Backup current remote binary to `{backup_dir}/{app}/{timestamp}.bak`
-4. Upload new binary via SFTP
-5. Start services bottom-up (dependencies first)
-6. Log to history.db
+Both implement the same interface: `deploy()`, `rollback()`, `get_status()`, `list_backups()`, `verify()`.
 
-### Dependency Resolution
+### Python Modules
 
-The `DependencyResolver` builds a graph from `depends_on` config entries. For libraries with `restart` lists, it uses those directly instead of computing dependencies.
+| Module | Purpose |
+|--------|---------|
+| `cli.py` | Click command handlers, main orchestration |
+| `config.py` | YAML config loading, multi-module support |
+| `transport/base.py` | Abstract transport interface |
+| `transport/ssh.py` | SSH/SFTP implementation |
+| `transport/csp.py` | CSP/DTP implementation |
+| `deployer.py` | Backup creation, binary upload, hash verification |
+| `services.py` | systemd service management |
+| `dependencies.py` | Topological sort for service ordering |
+| `history.py` | SQLite deployment tracking |
+| `output.py` | CLI formatting (colors, symbols, steps) |
+| `csp/dtp_server.py` | DTP server for serving binaries to satellite |
 
-Stop order: Dependents first (top-down)
-Start order: Dependencies first (bottom-up)
+### satdeploy-agent (C)
 
-### Config Structure
+Runs on target, listens on CSP port 20 for protobuf commands:
+
+| Command | Action |
+|---------|--------|
+| `STATUS` | Return app statuses with hashes |
+| `DEPLOY` | Stop app, backup, download via DTP, install, start |
+| `ROLLBACK` | Restore from backup directory |
+| `LIST_VERSIONS` | List available backups |
+| `VERIFY` | Return SHA256 of installed binary |
+
+**Interfaces:** ZMQ (default), CAN, KISS serial
+
+**Dependencies:** libcsp, libparam, DTP, protobuf-c
+
+### satdeploy-apm Slash Commands
+
+Ground station csh module providing:
+- `satdeploy status` - Query agent status
+- `satdeploy deploy <app>` - Deploy binary
+- `satdeploy rollback <app>` - Rollback
+- `satdeploy list <app>` - List backups
+- `satdeploy verify <app>` - Verify checksum
+
+## CLI Commands
+
+```bash
+# Core commands
+satdeploy init                      # Interactive setup
+satdeploy push <app>                # Deploy binary
+satdeploy push <app> --local ./path # Deploy with path override
+satdeploy push --all                # Deploy all apps
+satdeploy status                    # Show all app statuses
+satdeploy list <app>                # List versions (deployed + backups)
+satdeploy rollback <app>            # Restore previous version
+satdeploy rollback <app> <hash>     # Restore specific version
+satdeploy logs <app>                # Show service logs
+satdeploy config                    # Show current config
+
+# Fleet commands (multi-module)
+satdeploy fleet status              # Status across all modules
+satdeploy diff <module1> <module2>  # Compare app versions
+satdeploy sync <source> <target>    # Sync target to match source
+```
+
+## Config Structure
+
+Config lives at `~/.satdeploy/config.yaml`:
 
 ```yaml
-target:
-  host: 192.168.1.50
-  user: root
+modules:
+  default:                    # SSH transport
+    transport: ssh
+    host: 192.168.1.50
+    user: root
+
+  satellite1:                 # CSP transport
+    transport: csp
+    zmq_endpoint: tcp://localhost:4040
+    agent_node: 5424
+    ground_node: 4040
+    appsys_node: 10
 
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
 
 apps:
   controller:
-    local: ./build/controller        # Local binary path
-    remote: /opt/disco/bin/controller # Remote deployment path
-    service: controller.service       # Systemd service (null for libraries)
-    depends_on: [csp_server]          # Services this depends on
+    local: ./build/controller
+    remote: /opt/disco/bin/controller
+    service: controller.service
+    depends_on: [csp_server]
+    param: mng_controller     # libparam name (CSP only)
 
   libparam:
+    local: ./build/libparam.so
+    remote: /usr/lib/libparam.so
     service: null
-    restart: [csp_server, controller] # Services to restart when lib changes
+    restart: [csp_server, controller]
 ```
+
+## Deployment Flow
+
+### SSH Transport
+1. Stop services (dependents first)
+2. Backup current binary to `{backup_dir}/{app}/{timestamp}-{hash}.bak`
+3. Upload via SFTP
+4. Start services (dependencies first)
+5. Health check
+6. Record to history.db
+
+### CSP Transport
+1. Send DEPLOY command to agent (port 20)
+2. Agent stops app via libparam
+3. Agent backs up current binary
+4. Agent downloads new binary via DTP from ground
+5. Agent verifies checksum
+6. Agent starts app via libparam
+
+## Dependency Resolution
+
+- **Stop order:** Dependents first (top-down)
+- **Start order:** Dependencies first (bottom-up)
+
+For libraries with `restart` lists, those services are used directly instead of computing the dependency graph.
 
 ## Testing
 
-Tests use pytest with pytest-mock. Each CLI command has its own test file (`test_cli_*.py`). Module tests mock SSH connections and verify behavior without real network calls.
+Tests use pytest with pytest-mock. Run with:
 
-Test config fixtures create temporary `~/.satdeploy` directories with sample config.yaml files.
+```bash
+pytest                    # All tests
+pytest tests/test_cli_push.py  # Single file
+pytest -k "test_push"     # Pattern match
+```
+
+Test files mock SSH/CSP connections - no real network calls.
+
+## Protocol Details
+
+### CSP Ports (Agent)
+- **Port 20:** Deploy command handler (protobuf)
+- **Port 7:** DTP metadata requests
+- **Port 8:** DTP data packets
+
+### Backup Naming
+Files are named: `{YYYYMMDD}-{HHMMSS}-{hash8}.bak`
+
+Hash is first 8 chars of SHA256 (SSH) or FNV-1a (CSP/agent).
