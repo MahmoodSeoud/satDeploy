@@ -234,7 +234,11 @@ static void status_metadata_callback(const char *app_name, const char *remote_pa
     app->app_name = strdup(app_name);
     app->remote_path = strdup(remote_path);
     app->binary_hash = hash_buf[ctx->count];
-    app->running = 0;  /* TODO: Check if process is running */
+    /* Check if process is running by matching the binary path.
+       Use [/] trick to prevent pgrep from matching itself. */
+    char cmd[320];
+    snprintf(cmd, sizeof(cmd), "pgrep -f '[/]%s' > /dev/null 2>&1", remote_path + 1);
+    app->running = (system(cmd) == 0) ? 1 : 0;
 
     ctx->entries[ctx->count] = app;
     ctx->count++;

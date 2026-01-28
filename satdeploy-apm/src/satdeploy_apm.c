@@ -19,6 +19,9 @@
 #include <slash/optparse.h>
 #include <csp/csp.h>
 #include <apm/csh_api.h>
+#include <param/param.h>
+#include <param/param_list.h>
+#include <param/param_client.h>
 
 #include "deploy.pb-c.h"
 #include "config.h"
@@ -65,6 +68,105 @@ static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
     fclose(f);
 
     snprintf(hash_out, hash_size, "%08x", h);
+    return 0;
+}
+
+/**
+ * Get satdeploy-agent node address by querying mng_satdeploy from app-sys-manager.
+ *
+ * @param appsys_node  CSP node of app-sys-manager (e.g., 5421)
+ * @return agent node address, or 0 on error
+ */
+static uint16_t get_agent_node_from_appsys(unsigned int appsys_node)
+{
+    int timeout = 2000;
+
+    /* Download param list from app-sys-manager */
+    int ret = param_list_download(appsys_node, timeout, 2, 0);
+    if (ret < 0) {
+        return 0;
+    }
+
+    /* Find mng_satdeploy param */
+    param_t *param = param_list_find_name(appsys_node, "mng_satdeploy");
+    if (!param) {
+        return 0;
+    }
+
+    /* Pull the actual value from remote */
+    ret = param_pull_single(param, -1, CSP_PRIO_NORM, 0, appsys_node, timeout, 2);
+    if (ret < 0) {
+        return 0;
+    }
+
+    return param_get_uint16(param);
+}
+
+/**
+ * Restart an app via libparam on app-sys-manager.
+ *
+ * Reads the current param value, stops the app, then restores the original value.
+ * If the app wasn't running (param=0), starts it with fallback_node.
+ *
+ * @param appsys_node   CSP node of app-sys-manager (e.g., 5421)
+ * @param param_name    libparam name (e.g., "mng_dipp")
+ * @param fallback_node Node address to use if app wasn't running (0 = don't start)
+ * @return 0 on success, -1 on error
+ */
+static int restart_app_via_libparam(unsigned int appsys_node, const char *param_name,
+                                     uint16_t fallback_node)
+{
+    int timeout = 2000;
+
+    if (fallback_node == 0) {
+        printf("No csp_node configured, skipping restart\n");
+        return 0;
+    }
+
+    /* Download param list from app-sys-manager */
+    int ret = param_list_download(appsys_node, timeout, 2, 0);
+    if (ret < 0) {
+        printf("Warning: Failed to download param list from node %u\n", appsys_node);
+        return -1;
+    }
+
+    /* Find the param by name - it was created by param_list_download with valid timestamp */
+    param_t *param = param_list_find_name(appsys_node, param_name);
+    if (!param) {
+        printf("Warning: Param '%s' not found on node %u\n", param_name, appsys_node);
+        return -1;
+    }
+
+    /* Stop the app */
+    uint16_t stop_val = 0;
+    char valuebuf[16] __attribute__((aligned(16)));
+    memcpy(valuebuf, &stop_val, sizeof(stop_val));
+
+    if (!param->timestamp) {
+        printf("Warning: param->timestamp is NULL\n");
+        return -1;
+    }
+    param->timestamp->tv_sec = 0;
+    ret = param_push_single(param, -1, CSP_PRIO_NORM, valuebuf, 0, appsys_node, timeout, 2, true);
+    if (ret < 0) {
+        printf("Warning: Failed to stop app\n");
+        /* Continue anyway */
+    } else {
+        printf("Stopped %s\n", param_name);
+    }
+
+    usleep(500000);  /* 500ms delay */
+
+    /* Start the app */
+    memcpy(valuebuf, &fallback_node, sizeof(fallback_node));
+    param->timestamp->tv_sec = 0;
+    ret = param_push_single(param, -1, CSP_PRIO_NORM, valuebuf, 0, appsys_node, timeout, 2, true);
+    if (ret < 0) {
+        printf("Warning: Failed to start app\n");
+        return -1;
+    }
+    printf("Started %s (node %u)\n", param_name, fallback_node);
+
     return 0;
 }
 
@@ -117,12 +219,13 @@ static int satdeploy_status_cmd(struct slash *slash)
     }
     optparse_del(parser);
 
-    /* Use config default if -n not specified */
+    /* Get agent node from app-sys-manager if not specified */
     if (node == 0) {
         satdeploy_config_t *config = satdeploy_config_load();
-        if (config && config->target_node != 0) {
-            node = config->target_node;
-        } else {
+        if (config && config->appsys_node > 0) {
+            node = get_agent_node_from_appsys(config->appsys_node);
+        }
+        if (node == 0) {
             node = slash_dfl_node;
         }
     }
@@ -180,6 +283,7 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     char *remote_path = NULL;
 
     int force = 0;
+    int no_restart = 0;
 
     optparse_t *parser = optparse_new("satdeploy deploy", "<app_name>");
     optparse_add_help(parser);
@@ -187,6 +291,7 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     optparse_add_string(parser, 'f', "file", "PATH", &local_path, "Local binary path (overrides config)");
     optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path");
     optparse_add_set(parser, 'F', "force", 1, &force, "Force deploy even if same version");
+    optparse_add_set(parser, 'N', "no-restart", 1, &no_restart, "Skip app restart after deploy");
 
     int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
     if (argi < 0) {
@@ -206,13 +311,16 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     /* Load config for defaults */
     satdeploy_config_t *config = satdeploy_config_load();
 
-    /* Use config default if -n not specified */
-    if (node == 0) {
-        if (config && config->target_node != 0) {
-            node = config->target_node;
-        } else {
-            node = slash_dfl_node;
+    /* Get agent node from app-sys-manager if not specified */
+    if (node == 0 && config && config->appsys_node > 0) {
+        node = get_agent_node_from_appsys(config->appsys_node);
+        if (node == 0) {
+            printf("Error: Could not get agent node from app-sys-manager (mng_satdeploy)\n");
+            printf("       Is satdeploy-agent running? Use -n to specify manually.\n");
+            return SLASH_EIO;
         }
+    } else if (node == 0) {
+        node = slash_dfl_node;
     }
 
     /* Look up app-specific config */
@@ -387,6 +495,21 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     output_success(success_msg);
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
+
+    /* Restart app via libparam if configured */
+    if (!no_restart && app_config && app_config->param[0] && config->appsys_node > 0) {
+        printf("\nRestarting %s via libparam...\n", app_name);
+        int restart_ret = restart_app_via_libparam(config->appsys_node, app_config->param,
+                                                    (uint16_t)app_config->csp_node);
+        if (restart_ret < 0) {
+            printf("Warning: App restart failed, binary deployed but not restarted\n");
+        } else {
+            output_success("App started");
+        }
+    } else if (!no_restart && app_config && !app_config->param[0]) {
+        printf("Note: No 'param' configured for %s, skipping restart\n", app_name);
+    }
+
     return SLASH_SUCCESS;
 }
 
@@ -419,13 +542,12 @@ static int satdeploy_rollback_cmd(struct slash *slash)
     /* Load config for defaults */
     satdeploy_config_t *config = satdeploy_config_load();
 
-    /* Use config default if -n not specified */
+    /* Get agent node from app-sys-manager if not specified */
+    if (node == 0 && config && config->appsys_node > 0) {
+        node = get_agent_node_from_appsys(config->appsys_node);
+    }
     if (node == 0) {
-        if (config && config->target_node != 0) {
-            node = config->target_node;
-        } else {
-            node = slash_dfl_node;
-        }
+        node = slash_dfl_node;
     }
 
     /* Look up remote_path from config */
@@ -520,12 +642,13 @@ static int satdeploy_list_cmd(struct slash *slash)
     app_name = slash->argv[argi + 1];
     optparse_del(parser);
 
-    /* Use config default if -n not specified */
+    /* Get agent node from app-sys-manager if not specified */
     if (node == 0) {
         satdeploy_config_t *config = satdeploy_config_load();
-        if (config && config->target_node != 0) {
-            node = config->target_node;
-        } else {
+        if (config && config->appsys_node > 0) {
+            node = get_agent_node_from_appsys(config->appsys_node);
+        }
+        if (node == 0) {
             node = slash_dfl_node;
         }
     }
@@ -604,13 +727,12 @@ static int satdeploy_verify_cmd(struct slash *slash)
     /* Load config for defaults */
     satdeploy_config_t *config = satdeploy_config_load();
 
-    /* Use config default if -n not specified */
+    /* Get agent node from app-sys-manager if not specified */
+    if (node == 0 && config && config->appsys_node > 0) {
+        node = get_agent_node_from_appsys(config->appsys_node);
+    }
     if (node == 0) {
-        if (config && config->target_node != 0) {
-            node = config->target_node;
-        } else {
-            node = slash_dfl_node;
-        }
+        node = slash_dfl_node;
     }
 
     /* Look up remote_path from config if not specified */
@@ -675,18 +797,21 @@ static int satdeploy_config_cmd(struct slash *slash)
     }
 
     printf("\nDefaults:\n");
-    printf("  target_node: %u%s\n", config->target_node,
-           config->target_node == 0 ? " (use -n)" : "");
+    printf("  appsys_node: %u%s\n", config->appsys_node,
+           config->appsys_node == 0 ? " (restart disabled)" : "");
 
     printf("\nApps: %d\n", config->num_apps);
     for (int i = 0; i < config->num_apps; i++) {
         satdeploy_app_config_t *app = &config->apps[i];
         printf("  %s:\n", app->name);
         if (app->local_path[0]) {
-            printf("    local:  %s\n", app->local_path);
+            printf("    local:       %s\n", app->local_path);
         }
         if (app->remote_path[0]) {
-            printf("    remote: %s\n", app->remote_path);
+            printf("    remote:      %s\n", app->remote_path);
+        }
+        if (app->param[0]) {
+            printf("    param:       %s\n", app->param);
         }
     }
 

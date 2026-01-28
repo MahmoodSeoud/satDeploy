@@ -75,7 +75,6 @@ satdeploy_config_t *satdeploy_config_load(void)
     FILE *file = fopen(config_path, "r");
     if (!file) {
         /* Config file doesn't exist - return empty config with defaults */
-        g_config.target_node = 0;
         g_config.num_apps = 0;
         g_config.loaded = true;
         return &g_config;
@@ -92,7 +91,7 @@ satdeploy_config_t *satdeploy_config_load(void)
     yaml_parser_set_input_file(&parser, file);
 
     /* Set defaults */
-    g_config.target_node = 0;
+    g_config.appsys_node = 0;
     g_config.num_apps = 0;
 
     parse_state_t state = STATE_START;
@@ -163,8 +162,8 @@ satdeploy_config_t *satdeploy_config_load(void)
                 safe_strcpy(current_key, value, sizeof(current_key));
                 state = STATE_DEFAULTS_KEY;
             } else if (state == STATE_DEFAULTS_KEY) {
-                if (strcmp(current_key, "target_node") == 0) {
-                    g_config.target_node = (uint32_t)atoi(value);
+                if (strcmp(current_key, "appsys_node") == 0) {
+                    g_config.appsys_node = (uint32_t)atoi(value);
                 }
                 state = STATE_DEFAULTS;
             } else if (state == STATE_MODULES) {
@@ -174,10 +173,7 @@ satdeploy_config_t *satdeploy_config_load(void)
                 safe_strcpy(current_key, value, sizeof(current_key));
                 state = STATE_MODULE_KEY;
             } else if (state == STATE_MODULE_KEY) {
-                /* Parse legacy module fields */
-                if (strcmp(current_key, "agent_node") == 0) {
-                    g_config.target_node = (uint32_t)atoi(value);
-                }
+                /* Legacy module fields - ignored, use csh default node */
                 state = STATE_MODULE_MAP;
             } else if (state == STATE_APPS) {
                 /* This is an app name key */
@@ -202,6 +198,11 @@ satdeploy_config_t *satdeploy_config_load(void)
                            strcmp(current_key, "remote") == 0) {
                     safe_strcpy(current_app->remote_path, value,
                                sizeof(current_app->remote_path));
+                } else if (strcmp(current_key, "param") == 0) {
+                    safe_strcpy(current_app->param, value,
+                               sizeof(current_app->param));
+                } else if (strcmp(current_key, "csp_node") == 0) {
+                    current_app->csp_node = (uint32_t)atoi(value);
                 }
                 state = STATE_APP_MAP;
             }
