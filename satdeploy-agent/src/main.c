@@ -22,7 +22,7 @@
 
 #include "satdeploy_agent.h"
 
-#define DEFAULT_NODE_ADDR 5424
+#define DEFAULT_NODE_ADDR 5425
 #define DEFAULT_INTERFACE "ZMQ"
 #define DEFAULT_ZMQ_HOST "localhost"
 #define DEFAULT_CAN_DEVICE "can0"
@@ -55,9 +55,9 @@ static void print_usage(const char *prog) {
     printf("  -m, --netmask MASK     CSP netmask (default: %d)\n", DEFAULT_NETMASK);
     printf("  -h, --help             Show this help\n");
     printf("\nExamples:\n");
-    printf("  %s -i ZMQ -p localhost -a 5424      # ZMQ for testing\n", prog);
-    printf("  %s -i CAN -p can0 -a 5424           # CAN for satellite\n", prog);
-    printf("  %s -i KISS -p /dev/ttyS1 -a 5424    # KISS serial\n", prog);
+    printf("  %s -i ZMQ -p localhost -a 5425      # ZMQ for testing\n", prog);
+    printf("  %s -i CAN -p can0 -a 5425           # CAN for satellite\n", prog);
+    printf("  %s -i KISS -p /dev/ttyS1 -a 5425    # KISS serial\n", prog);
 }
 
 static csp_iface_t *iface_init(const char *interface, const char *port,

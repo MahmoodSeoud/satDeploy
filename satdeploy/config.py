@@ -1,6 +1,6 @@
 """Configuration loading and validation for satdeploy."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -36,6 +36,15 @@ class ModuleConfig:
     baudrate: int = 0
     vmem_path: str = ""
 
+    # Per-app CSP node addresses (app_name -> run_node)
+    app_nodes: dict[str, int] | None = None
+
+    def get_run_node(self, app_name: str) -> int | None:
+        """Get the CSP run_node for an app on this module."""
+        if self.app_nodes is None:
+            return None
+        return self.app_nodes.get(app_name)
+
 
 @dataclass
 class AppConfig:
@@ -50,7 +59,6 @@ class AppConfig:
 
     # CSP-specific fields for libparam control
     param: str | None = None  # libparam name (e.g., "mng_dipp")
-    run_node: int | None = None  # CSP node where app runs
 
 DEFAULT_CONFIG_DIR = Path.home() / ".satdeploy"
 
@@ -151,7 +159,6 @@ class Config:
             service_template=app_data.get("service_template"),
             vmem_dir=app_data.get("vmem_dir"),
             param=app_data.get("param"),
-            run_node=app_data.get("run_node"),
         )
 
     @property
@@ -216,6 +223,8 @@ class Config:
                 interface=appsys.get("interface", 0),
                 baudrate=appsys.get("baudrate", 0),
                 vmem_path=appsys.get("vmem_path", ""),
+                # Per-app node addresses
+                app_nodes=mod.get("app_nodes"),
             )
         return result
 

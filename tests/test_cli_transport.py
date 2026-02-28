@@ -93,6 +93,8 @@ modules:
     agent_node: 5424
     ground_node: 4040
     appsys_node: 10
+    app_nodes:
+      dipp: 5
 
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
@@ -102,7 +104,6 @@ apps:
     local: {local_binary}
     remote: /opt/disco/bin/dipp
     param: mng_dipp
-    run_node: 5
 """)
         return config_dir
 
@@ -206,7 +207,6 @@ apps:
     local: {local_binary}
     remote: /opt/disco/bin/dipp
     param: mng_dipp
-    run_node: 5
 """)
         return config_dir
 
@@ -305,7 +305,6 @@ apps:
     local: {local_binary}
     remote: /opt/disco/bin/dipp
     param: mng_dipp
-    run_node: 5
 """)
         return config_dir
 
@@ -376,7 +375,6 @@ apps:
     local: {local_binary}
     remote: /opt/disco/bin/dipp
     param: mng_dipp
-    run_node: 5
 """)
         return config_dir
 

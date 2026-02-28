@@ -327,7 +327,6 @@ def init(config_dir: Path | None):
                 "remote": "/path/to/remote/binary",
                 "service": None,
                 "param": None,
-                "run_node": None,
             },
         },
     }
@@ -425,7 +424,7 @@ def push(
                     remote_path=remote_path,
                     param_name=app_config.param,
                     appsys_node=module_config.appsys_node,
-                    run_node=app_config.run_node,
+                    run_node=module_config.get_run_node(app),
                 )
 
                 if result.success:

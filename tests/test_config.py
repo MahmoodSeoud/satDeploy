@@ -540,7 +540,6 @@ class TestCSPModuleConfig:
                     "local": "./build/dipp",
                     "remote": "/usr/bin/dipp",
                     "param": "mng_dipp",
-                    "run_node": 5423,
                 },
             },
         }
@@ -551,7 +550,73 @@ class TestCSPModuleConfig:
         app = config.get_app("dipp")
 
         assert app.param == "mng_dipp"
-        assert app.run_node == 5423
+
+    def test_module_config_with_app_nodes(self, tmp_path):
+        """ModuleConfig should support per-app run_node via app_nodes."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {
+                "som1": {
+                    "transport": "csp",
+                    "zmq_endpoint": "tcp://localhost:4040",
+                    "agent_node": 5424,
+                    "appsys_node": 5421,
+                    "app_nodes": {
+                        "dipp": 5423,
+                        "camera-control": 5422,
+                    },
+                },
+                "som2": {
+                    "transport": "csp",
+                    "zmq_endpoint": "tcp://localhost:4040",
+                    "agent_node": 5478,
+                    "appsys_node": 5475,
+                    "app_nodes": {
+                        "dipp": 5477,
+                        "camera-control": 5476,
+                    },
+                },
+            },
+            "appsys": {},
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+
+        som1 = config.get_module("som1")
+        assert som1.app_nodes == {"dipp": 5423, "camera-control": 5422}
+        assert som1.get_run_node("dipp") == 5423
+        assert som1.get_run_node("camera-control") == 5422
+        assert som1.get_run_node("unknown-app") is None
+
+        som2 = config.get_module("som2")
+        assert som2.get_run_node("dipp") == 5477
+        assert som2.get_run_node("camera-control") == 5476
+
+    def test_module_config_without_app_nodes(self, tmp_path):
+        """ModuleConfig.get_run_node() returns None when app_nodes not set."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {
+                "som1": {
+                    "transport": "csp",
+                    "zmq_endpoint": "tcp://localhost:4040",
+                    "agent_node": 5424,
+                },
+            },
+            "appsys": {},
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        module = config.get_module("som1")
+
+        assert module.app_nodes is None
+        assert module.get_run_node("dipp") is None
 
 
 class TestGetAppsys:
