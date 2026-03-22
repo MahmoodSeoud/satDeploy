@@ -3,6 +3,7 @@
 from typing import Optional
 
 from satdeploy.deployer import Deployer
+from satdeploy.hash import compute_file_hash
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 from satdeploy.transport.base import (
@@ -29,6 +30,7 @@ class SSHTransport(Transport):
         backup_dir: str,
         port: int = 22,
         max_backups: int = 10,
+        apps: Optional[dict[str, dict]] = None,
     ):
         """Initialize SSH transport.
 
@@ -38,12 +40,14 @@ class SSHTransport(Transport):
             backup_dir: Remote directory for backups.
             port: SSH port (default 22).
             max_backups: Maximum backups to keep per app.
+            apps: Dictionary of app configs with 'remote' and 'service' keys.
         """
         self.host = host
         self.user = user
         self.backup_dir = backup_dir
         self.port = port
         self.max_backups = max_backups
+        self._apps = apps or {}
         self._ssh: Optional[SSHClient] = None
         self._deployer: Optional[Deployer] = None
         self._service_manager: Optional[ServiceManager] = None
@@ -63,6 +67,16 @@ class SSHTransport(Transport):
         self._deployer = Deployer(self._ssh, self.backup_dir, self.max_backups)
         self._service_manager = ServiceManager(self._ssh)
 
+    @property
+    def ssh(self) -> Optional["SSHClient"]:
+        """Access the underlying SSH client (for service file sync)."""
+        return self._ssh
+
+    @property
+    def service_manager(self) -> Optional[ServiceManager]:
+        """Access the underlying service manager (for service file sync)."""
+        return self._service_manager
+
     def disconnect(self) -> None:
         """Close SSH connection."""
         if self._ssh:
@@ -80,9 +94,12 @@ class SSHTransport(Transport):
         appsys_node: Optional[int] = None,
         run_node: Optional[int] = None,
         expected_checksum: Optional[str] = None,
-        service_name: Optional[str] = None,
+        services: Optional[list[tuple[str, str]]] = None,
     ) -> DeployResult:
         """Deploy a binary via SSH/SFTP.
+
+        Handles hash-skip (skip if same binary already deployed) and
+        backup-restore (restore from existing backup instead of uploading).
 
         Args:
             app_name: Name of the application.
@@ -92,7 +109,8 @@ class SSHTransport(Transport):
             appsys_node: Ignored for SSH transport.
             run_node: Ignored for SSH transport.
             expected_checksum: Optional checksum to verify after upload.
-            service_name: Optional systemd service to stop/start.
+            services: List of (app_name, service_name) tuples to stop/start
+                in dependency order. If None, no service management is done.
 
         Returns:
             DeployResult indicating success/failure and backup path.
@@ -104,34 +122,88 @@ class SSHTransport(Transport):
             )
 
         try:
-            # Stop service if specified
-            if service_name:
-                self._service_manager.stop(service_name)
+            local_hash = compute_file_hash(local_path)
+            remote_hash = self._deployer.compute_remote_hash(remote_path)
 
-            # Backup existing binary
-            backup_path = self._deployer.backup(app_name, remote_path)
+            # Hash-skip: same binary already deployed
+            if local_hash and remote_hash and local_hash == remote_hash:
+                return DeployResult(
+                    success=True,
+                    binary_hash=local_hash,
+                    skipped=True,
+                )
 
-            # Deploy new binary
-            self._deployer.deploy(local_path, remote_path)
+            # Check if local version exists in backups (restore instead of upload)
+            existing_backups = self._deployer.list_backups(app_name)
+            existing_hashes = {
+                b.get("hash"): b for b in existing_backups if b.get("hash")
+            }
+            local_in_backups = local_hash in existing_hashes
+            remote_needs_backup = (
+                remote_hash and remote_hash not in existing_hashes
+            )
 
-            # Verify checksum if provided
-            if expected_checksum:
-                actual = self._deployer.compute_remote_hash(remote_path)
-                if actual != expected_checksum:
+            # Stop services
+            services_stopped = False
+            if services:
+                for _, svc_name in services:
+                    self._service_manager.stop(svc_name)
+                services_stopped = True
+
+            try:
+                if local_in_backups:
+                    # Restore from existing backup
+                    backup = existing_hashes[local_hash]
+                    backup_path = backup["path"]
+
+                    if remote_needs_backup:
+                        self._deployer.backup(app_name, remote_path)
+
+                    self._deployer.restore(backup_path, remote_path)
+
                     return DeployResult(
-                        success=False,
-                        error_message=f"Checksum mismatch: expected {expected_checksum}, got {actual}",
+                        success=True,
                         backup_path=backup_path,
+                        binary_hash=local_hash,
+                        restored=True,
                     )
 
-            # Start service if specified
-            if service_name:
-                self._service_manager.start(service_name)
+                # Fresh deploy — upload new binary
+                backup_path = None
+                if remote_needs_backup:
+                    backup_path = self._deployer.backup(app_name, remote_path)
 
-            return DeployResult(
-                success=True,
-                backup_path=backup_path,
-            )
+                self._deployer.deploy(local_path, remote_path)
+
+                # Verify checksum if provided
+                if expected_checksum:
+                    actual = self._deployer.compute_remote_hash(remote_path)
+                    if actual != expected_checksum:
+                        # Restore backup before returning failure so services
+                        # don't restart with a corrupt binary
+                        if backup_path:
+                            self._deployer.restore(backup_path, remote_path)
+                        return DeployResult(
+                            success=False,
+                            error_message=(
+                                f"Checksum mismatch: expected "
+                                f"{expected_checksum}, got {actual}"
+                            ),
+                            backup_path=backup_path,
+                            binary_hash=local_hash,
+                        )
+
+                return DeployResult(
+                    success=True,
+                    backup_path=backup_path,
+                    binary_hash=local_hash,
+                )
+
+            finally:
+                # Always restart services if we stopped them
+                if services_stopped and services:
+                    for _, svc_name in reversed(services):
+                        self._service_manager.start(svc_name)
 
         except SSHError as e:
             return DeployResult(
@@ -207,11 +279,8 @@ class SSHTransport(Transport):
                 error_message=str(e),
             )
 
-    def get_status(self, apps: dict[str, dict]) -> dict[str, AppStatus]:
+    def get_status(self) -> dict[str, AppStatus]:
         """Get status of deployed applications via SSH.
-
-        Args:
-            apps: Dictionary of app configs with 'remote' and 'service' keys.
 
         Returns:
             Dictionary mapping app names to their status.
@@ -220,7 +289,7 @@ class SSHTransport(Transport):
             return {}
 
         result = {}
-        for app_name, config in apps.items():
+        for app_name, config in self._apps.items():
             remote_path = config.get("remote", "")
             service = config.get("service")
 

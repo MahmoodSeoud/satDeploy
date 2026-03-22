@@ -15,6 +15,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include <openssl/evp.h>
+
 #include <slash/slash.h>
 #include <slash/optparse.h>
 #include <csp/csp.h>
@@ -55,19 +57,33 @@ static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
         return -1;
     }
 
-    /* FNV-1a hash - must match agent's backup_manager.c */
-    uint32_t h = 0x811c9dc5;
+    /* SHA256 hash - first 8 hex chars, matches agent and ground station */
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        fclose(f);
+        return -1;
+    }
+
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
+        EVP_MD_CTX_free(ctx);
+        fclose(f);
+        return -1;
+    }
+
     unsigned char buf[4096];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        for (size_t i = 0; i < n; i++) {
-            h ^= buf[i];
-            h *= 0x01000193;
-        }
+        EVP_DigestUpdate(ctx, buf, n);
     }
     fclose(f);
 
-    snprintf(hash_out, hash_size, "%08x", h);
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int digest_len;
+    EVP_DigestFinal_ex(ctx, digest, &digest_len);
+    EVP_MD_CTX_free(ctx);
+
+    snprintf(hash_out, hash_size, "%02x%02x%02x%02x",
+             digest[0], digest[1], digest[2], digest[3]);
     return 0;
 }
 
@@ -285,6 +301,37 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     int force = 0;
     int no_restart = 0;
 
+    /*
+     * Reorder argv so positional args come after options.
+     * slash's optparse uses POSIX-style parsing (stops at first non-option),
+     * so "deploy test_app -f /tmp/binary" would fail without this.
+     */
+    int sub_argc = slash->argc - 1;
+    const char **sub_argv = (const char **)slash->argv + 1;
+    const char *reordered[32];
+    int nopt = 0, npos = 0;
+    const char *positional[8];
+
+    for (int i = 0; i < sub_argc && i < 30; i++) {
+        if (sub_argv[i][0] == '-') {
+            reordered[nopt++] = sub_argv[i];
+            /* Options that take a value: consume the next arg too */
+            if (i + 1 < sub_argc &&
+                (strcmp(sub_argv[i], "-f") == 0 || strcmp(sub_argv[i], "--file") == 0 ||
+                 strcmp(sub_argv[i], "-r") == 0 || strcmp(sub_argv[i], "--remote") == 0 ||
+                 strcmp(sub_argv[i], "-n") == 0 || strcmp(sub_argv[i], "--node") == 0)) {
+                reordered[nopt++] = sub_argv[++i];
+            }
+        } else {
+            if (npos < 8)
+                positional[npos++] = sub_argv[i];
+        }
+    }
+    /* Append positional args after options */
+    for (int i = 0; i < npos; i++)
+        reordered[nopt + i] = positional[i];
+    int total = nopt + npos;
+
     optparse_t *parser = optparse_new("satdeploy deploy", "<app_name>");
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
@@ -293,19 +340,19 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     optparse_add_set(parser, 'F', "force", 1, &force, "Force deploy even if same version");
     optparse_add_set(parser, 'N', "no-restart", 1, &no_restart, "Skip app restart after deploy");
 
-    int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
+    int argi = optparse_parse(parser, total, reordered);
     if (argi < 0) {
         optparse_del(parser);
         return SLASH_EINVAL;
     }
 
-    if (argi >= slash->argc - 1) {
+    if (argi >= total) {
         printf("Error: app_name required\n");
         optparse_help(parser, stdout);
         optparse_del(parser);
         return SLASH_EUSAGE;
     }
-    app_name = slash->argv[argi + 1];
+    app_name = (char *)reordered[argi];
     optparse_del(parser);
 
     /* Load config for defaults */

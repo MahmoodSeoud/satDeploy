@@ -42,7 +42,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -63,7 +63,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -100,7 +100,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -133,7 +133,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -165,7 +165,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -197,7 +197,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -218,7 +218,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -254,7 +254,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
             color=True,
         )
 
@@ -287,7 +287,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
             color=True,
         )
 
@@ -320,7 +320,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
             color=True,
         )
 
@@ -368,7 +368,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "--config-dir", str(config_dir)],
+            ["status", "--config", str(config_dir / "config.yaml")],
             color=True,
         )
 

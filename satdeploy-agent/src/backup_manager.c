@@ -14,6 +14,7 @@
 #include "satdeploy_agent.h"
 
 #include <stdint.h>
+#include <openssl/evp.h>
 
 int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
     if (hash_size < 9) {
@@ -25,22 +26,41 @@ int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
         return -1;
     }
 
-    /* Read file and compute FNV-1a hash */
-    uint8_t buffer[8192];
-    uint32_t h = 0x811c9dc5;  /* FNV-1a offset basis */
+    /* Compute SHA256 hash */
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        fclose(f);
+        return -1;
+    }
 
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
+        EVP_MD_CTX_free(ctx);
+        fclose(f);
+        return -1;
+    }
+
+    uint8_t buffer[8192];
     size_t n;
     while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0) {
-        for (size_t i = 0; i < n; i++) {
-            h ^= buffer[i];
-            h *= 0x01000193;
-        }
+        EVP_DigestUpdate(ctx, buffer, n);
+    }
+
+    if (ferror(f)) {
+        EVP_MD_CTX_free(ctx);
+        fclose(f);
+        return -1;
     }
 
     fclose(f);
 
-    /* Convert to hex (first 8 chars) */
-    snprintf(hash_out, hash_size, "%08x", h);
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int digest_len;
+    EVP_DigestFinal_ex(ctx, digest, &digest_len);
+    EVP_MD_CTX_free(ctx);
+
+    /* Format first 4 bytes (8 hex chars) to match ground station */
+    snprintf(hash_out, hash_size, "%02x%02x%02x%02x",
+             digest[0], digest[1], digest[2], digest[3]);
     return 0;
 }
 
@@ -134,19 +154,42 @@ int backup_create(const char *app_name, const char *src_path,
         return -1;
     }
 
-    /* Generate backup filename: <hash>.bak (Carmack style - hash is unique key) */
-    char backup_path[MAX_PATH_LEN];
-    snprintf(backup_path, sizeof(backup_path), "%s/%s.bak", backup_dir, hash);
+    /* Generate backup filename: YYYYMMDD-HHMMSS-hash.bak (matches ground station) */
+    time_t now = time(NULL);
+    struct tm tm_info;
+    localtime_r(&now, &tm_info);
+    char timestamp[16];
+    strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", &tm_info);
 
-    /* Check if this version already backed up - skip if exists */
-    struct stat backup_st;
-    if (stat(backup_path, &backup_st) == 0) {
-        printf("[backup] File exists: %s (skip)\n", backup_path);
-        if (backup_path_out != NULL && backup_path_size > 0) {
-            strncpy(backup_path_out, backup_path, backup_path_size - 1);
-            backup_path_out[backup_path_size - 1] = '\0';
+    char backup_path[MAX_PATH_LEN];
+    snprintf(backup_path, sizeof(backup_path), "%s/%s-%s.bak",
+             backup_dir, timestamp, hash);
+
+    /* Check if this hash already backed up - search by hash suffix */
+    DIR *dir = opendir(backup_dir);
+    if (dir != NULL) {
+        char hash_suffix[32];
+        snprintf(hash_suffix, sizeof(hash_suffix), "-%s.bak", hash);
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            size_t name_len = strlen(entry->d_name);
+            size_t suffix_len = strlen(hash_suffix);
+            if (name_len >= suffix_len &&
+                strcmp(entry->d_name + name_len - suffix_len, hash_suffix) == 0) {
+                /* Found existing backup with same hash */
+                char existing_path[MAX_PATH_LEN];
+                snprintf(existing_path, sizeof(existing_path), "%s/%s",
+                         backup_dir, entry->d_name);
+                printf("[backup] Hash exists: %s (skip)\n", existing_path);
+                if (backup_path_out != NULL && backup_path_size > 0) {
+                    strncpy(backup_path_out, existing_path, backup_path_size - 1);
+                    backup_path_out[backup_path_size - 1] = '\0';
+                }
+                closedir(dir);
+                return 0;
+            }
         }
-        return 0;  /* Success - version already backed up */
+        closedir(dir);
     }
 
     /* Copy file to backup */
@@ -189,8 +232,8 @@ int backup_restore(const char *backup_path, const char *dest_path) {
 
 /**
  * Parse backup filename to extract version, timestamp, and hash.
- * New format: <hash>.bak (Carmack style)
- * Old format: YYYYMMDD-HHMMSS-<hash>.bak (for migration)
+ * Current format: YYYYMMDD-HHMMSS-<hash>.bak (matches ground station)
+ * Legacy format: <hash>.bak (hash-only, pre-unification)
  */
 static int parse_backup_filename(const char *filename, const char *full_path,
                                   char *version, size_t version_size,
@@ -207,9 +250,9 @@ static int parse_backup_filename(const char *filename, const char *full_path,
     strncpy(name, filename, len - 4);
     name[len - 4] = '\0';
 
-    /* Try new format first: just hash (8 hex chars) */
+    /* Try legacy format first: just hash (8 hex chars) */
     if (len == 12) {  /* 8 chars hash + 4 chars ".bak" */
-        /* New Carmack format: {hash}.bak */
+        /* Legacy format: {hash}.bak */
         if (hash != NULL && hash_size > 0) {
             strncpy(hash, name, hash_size - 1);
             hash[hash_size - 1] = '\0';
@@ -224,10 +267,11 @@ static int parse_backup_filename(const char *filename, const char *full_path,
         if (timestamp != NULL && timestamp_size > 0 && full_path != NULL) {
             struct stat st;
             if (stat(full_path, &st) == 0) {
-                struct tm *tm = localtime(&st.st_mtime);
+                struct tm tm;
+                localtime_r(&st.st_mtime, &tm);
                 snprintf(timestamp, timestamp_size, "%04d-%02d-%02dT%02d:%02d:%02d",
-                         tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
-                         tm->tm_hour, tm->tm_min, tm->tm_sec);
+                         tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                         tm.tm_hour, tm.tm_min, tm.tm_sec);
             } else {
                 strncpy(timestamp, "unknown", timestamp_size - 1);
             }
@@ -235,7 +279,7 @@ static int parse_backup_filename(const char *filename, const char *full_path,
         return 0;
     }
 
-    /* Try old format: YYYYMMDD-HHMMSS-hash */
+    /* Current format: YYYYMMDD-HHMMSS-hash */
     int year, mon, day, hour, min, sec;
     char hash_buf[32];
 

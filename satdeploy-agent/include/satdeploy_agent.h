@@ -16,8 +16,9 @@
 /* Default backup directory */
 #define BACKUP_DIR "/opt/satdeploy/backups"
 
-/* Maximum path length */
-#define MAX_PATH_LEN 256
+/* Maximum path length — sized to handle backup paths like
+ * /opt/satdeploy/backups/<app>/YYYYMMDD-HHMMSS-<hash>.bak */
+#define MAX_PATH_LEN 512
 
 /* Maximum app name length */
 #define MAX_APP_NAME_LEN 64
@@ -65,9 +66,9 @@ int mkdir_p(const char *path);
 int copy_file(const char *src, const char *dst);
 
 /**
- * Compute FNV-1a checksum of a file.
+ * Compute SHA256 checksum of a file.
  *
- * Uses FNV-1a hash for fast deduplication (not cryptographic).
+ * Returns first 8 hex chars of SHA256 digest.
  *
  * @param path Path to the file.
  * @param hash_out Buffer to store 8-char hex digest.

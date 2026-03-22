@@ -38,7 +38,7 @@ apps:
     remote: /usr/lib/libparam.so
     service: null
 """)
-        return config_dir
+        return config_file
 
     def test_logs_command_exists(self, runner):
         """The logs command should exist."""
@@ -55,19 +55,19 @@ apps:
     def test_logs_fails_without_config(self, runner, tmp_path):
         """Logs command fails if no config exists."""
         config_dir = tmp_path / ".satdeploy"
-        result = runner.invoke(main, ["logs", "controller", "--config-dir", str(config_dir)])
+        result = runner.invoke(main, ["logs", "controller", "--config", str(config_dir / "config.yaml")])
         assert result.exit_code != 0
         assert "config" in result.output.lower() or "not found" in result.output.lower()
 
     def test_logs_fails_for_unknown_app(self, runner, config_with_app):
         """Logs command fails for unknown app."""
-        result = runner.invoke(main, ["logs", "unknown", "--config-dir", str(config_with_app)])
+        result = runner.invoke(main, ["logs", "unknown", "--config", str(config_with_app)])
         assert result.exit_code != 0
         assert "unknown" in result.output.lower() or "not found" in result.output.lower()
 
     def test_logs_fails_for_app_without_service(self, runner, config_with_app, mocker):
         """Logs command fails for apps without a service (libraries)."""
-        result = runner.invoke(main, ["logs", "libparam", "--config-dir", str(config_with_app)])
+        result = runner.invoke(main, ["logs", "libparam", "--config", str(config_with_app)])
         assert result.exit_code != 0
         assert "service" in result.output.lower() or "library" in result.output.lower()
 
@@ -80,7 +80,7 @@ apps:
 
         mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
 
-        result = runner.invoke(main, ["logs", "controller", "--config-dir", str(config_with_app)])
+        result = runner.invoke(main, ["logs", "controller", "--config", str(config_with_app)])
         assert result.exit_code == 0
         assert "Starting up" in result.output
         assert "Ready" in result.output
@@ -94,7 +94,7 @@ apps:
 
         mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
 
-        result = runner.invoke(main, ["logs", "controller", "--lines", "50", "--config-dir", str(config_with_app)])
+        result = runner.invoke(main, ["logs", "controller", "--lines", "50", "--config", str(config_with_app)])
         assert result.exit_code == 0
         # Verify journalctl was called with correct number of lines
         mock_ssh.run.assert_called()
@@ -110,7 +110,7 @@ apps:
 
         mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
 
-        result = runner.invoke(main, ["logs", "controller", "--config-dir", str(config_with_app)])
+        result = runner.invoke(main, ["logs", "controller", "--config", str(config_with_app)])
         assert result.exit_code == 0
         # Verify journalctl was called with 100 lines
         mock_ssh.run.assert_called()
@@ -145,7 +145,7 @@ apps:
     remote: /opt/disco/bin/controller
     service: controller.service
 """)
-        return config_dir
+        return config_file
 
     def test_logs_shows_header(self, runner, config_with_app, mocker):
         """Logs command should show a header with app name."""
@@ -158,7 +158,7 @@ apps:
 
         result = runner.invoke(
             main,
-            ["logs", "controller", "--config-dir", str(config_with_app)],
+            ["logs", "controller", "--config", str(config_with_app)],
             color=True,
         )
 

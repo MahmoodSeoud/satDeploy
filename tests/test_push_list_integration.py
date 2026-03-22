@@ -31,8 +31,8 @@ def make_config(apps: dict) -> dict:
 class TestPushThenListWorkflow:
     """Test the push-push-list workflow that should show backups."""
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_twice_then_list_shows_one_backup(self, mock_ssh_class, tmp_path):
+    @patch("satdeploy.cli.get_transport")
+    def test_push_twice_then_list_shows_one_backup(self, mock_get_transport, tmp_path):
         """After pushing twice from clean state, list should show one backup.
 
         Scenario:
@@ -41,6 +41,8 @@ class TestPushThenListWorkflow:
         3. Push v2 - v1 is backed up
         4. List should show 1 backup (v1)
         """
+        from satdeploy.transport.base import DeployResult
+
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
@@ -64,58 +66,52 @@ class TestPushThenListWorkflow:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-
-        # First push: remote file doesn't exist
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(exit_code=0, stdout="")
+        transport = MagicMock()
+        transport.deploy.return_value = DeployResult(
+            success=True, binary_hash="aaaaaaaa",
+        )
+        mock_get_transport.return_value = transport
 
         result1 = runner.invoke(
             main,
-            ["push", "test_app", "--config-dir", str(config_dir)],
+            ["push", "test_app", "--config", str(config_dir / "config.yaml")],
         )
         assert result1.exit_code == 0, f"First push failed: {result1.output}"
 
         # Now modify binary for second push
         binary_v1.write_bytes(b"version 2 content - different!")
 
-        # Second push: remote file NOW exists, and we need to return hash
-        mock_ssh.file_exists.return_value = True
-        # Return a hash when sha256sum is called (for backup naming)
-        mock_ssh.run.side_effect = lambda cmd, **kwargs: Mock(
-            exit_code=0,
-            stdout="abc12345def67890  /home/user/bin/test_app\n" if "sha256sum" in cmd else ""
+        transport.deploy.return_value = DeployResult(
+            success=True, binary_hash="bbbbbbbb",
+            backup_path="/backups/test_app/20241227-120000-aaaaaaaa.bak",
         )
 
         result2 = runner.invoke(
             main,
-            ["push", "test_app", "--config-dir", str(config_dir)],
+            ["push", "test_app", "--config", str(config_dir / "config.yaml")],
         )
         assert result2.exit_code == 0, f"Second push failed: {result2.output}"
 
-        # Now list should show the backup
-        # The backup was created during second push with timestamp-hash format
-        mock_ssh.run.side_effect = None
-        mock_ssh.run.return_value = Mock(
-            exit_code=0,
-            # This simulates what ls would return on the backup directory
-            stdout="20241227-120000-abc12345.bak\n"
-        )
+        # Now list should show the backup — use SSH mock for list command
+        with patch("satdeploy.cli.SSHClient") as mock_ssh_class:
+            mock_ssh = MagicMock()
+            mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+            mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+            mock_ssh.file_exists.return_value = True
+            mock_ssh.run.return_value = Mock(
+                exit_code=0,
+                stdout="20241227-120000-aaaaaaaa.bak\n"
+            )
 
-        result3 = runner.invoke(
-            main,
-            ["list", "test_app", "--config-dir", str(config_dir)],
-        )
+            result3 = runner.invoke(
+                main,
+                ["list", "test_app", "--config", str(config_dir / "config.yaml")],
+            )
 
         assert result3.exit_code == 0, f"List failed: {result3.output}"
-        # Should show the backup with timestamp and hash
-        assert "abc12345" in result3.output or "2024-12-27" in result3.output, \
+        # Should show the backup with hash
+        assert "aaaaaaaa" in result3.output or "2024-12-27" in result3.output, \
             f"Expected backup info in output but got: {result3.output}"
-        # Should NOT say "no backups"
-        assert "no backup" not in result3.output.lower(), \
-            f"Unexpected 'no backups' message: {result3.output}"
 
     @patch("satdeploy.cli.SSHClient")
     def test_list_shows_empty_when_no_versions_exist(self, mock_ssh_class, tmp_path):
@@ -151,7 +147,7 @@ class TestPushThenListWorkflow:
 
         result = runner.invoke(
             main,
-            ["list", "test_app", "--config-dir", str(config_dir)],
+            ["list", "test_app", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -233,7 +229,7 @@ class TestListShowsCurrentlyDeployed:
 
         result = runner.invoke(
             main,
-            ["list", "test_app", "--config-dir", str(config_dir)],
+            ["list", "test_app", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0, f"List failed: {result.output}"
@@ -305,7 +301,7 @@ class TestListShowsCurrentlyDeployed:
 
         result = runner.invoke(
             main,
-            ["list", "test_app", "--config-dir", str(config_dir)],
+            ["list", "test_app", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0, f"List failed: {result.output}"
@@ -321,9 +317,11 @@ class TestListShowsCurrentlyDeployed:
 class TestBackupCreatedOnSecondPush:
     """Test that backup is actually created when pushing over existing file."""
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_second_push_creates_backup_with_hash_in_filename(self, mock_ssh_class, tmp_path):
-        """When pushing over existing binary, backup filename includes hash."""
+    @patch("satdeploy.cli.get_transport")
+    def test_second_push_creates_backup_with_hash_in_filename(self, mock_get_transport, tmp_path):
+        """When pushing over existing binary, transport.deploy is called and backup path has hash."""
+        from satdeploy.transport.base import DeployResult
+
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
@@ -346,37 +344,29 @@ class TestBackupCreatedOnSecondPush:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-
-        # Remote file exists
-        mock_ssh.file_exists.return_value = True
-
-        # Track all commands run
-        commands_run = []
-        def track_run(cmd, **kwargs):
-            commands_run.append(cmd)
-            if "sha256sum" in cmd:
-                return Mock(exit_code=0, stdout="abc12345def67890  /path\n")
-            return Mock(exit_code=0, stdout="")
-
-        mock_ssh.run.side_effect = track_run
+        transport = MagicMock()
+        transport.deploy.return_value = DeployResult(
+            success=True,
+            binary_hash="abc12345",
+            backup_path="/backups/test_app/20241227-120000-abc12345.bak",
+        )
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "test_app", "--config-dir", str(config_dir)],
+            ["push", "test_app", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0, f"Push failed: {result.output}"
 
-        # Verify backup was created with hash in filename
-        cp_commands = [c for c in commands_run if c.startswith("cp ")]
-        assert len(cp_commands) >= 1, f"No cp command found. Commands: {commands_run}"
+        # Verify transport.deploy was called
+        transport.deploy.assert_called_once()
 
-        # The backup should include the hash
-        backup_cp = cp_commands[0]
-        assert "abc12345" in backup_cp, \
-            f"Expected hash in backup filename, got: {backup_cp}"
-        assert ".bak" in backup_cp, \
-            f"Expected .bak extension, got: {backup_cp}"
+        # Check history records the backup path with hash
+        from satdeploy.history import History
+        history = History(config_dir / "history.db")
+        records = history.get_history("test_app")
+        assert len(records) == 1
+        assert records[0].backup_path is not None
+        assert "abc12345" in records[0].backup_path
+        assert ".bak" in records[0].backup_path

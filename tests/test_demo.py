@@ -109,11 +109,12 @@ class TestIsAgentContainerRunning:
 
 class TestWriteDemoConfig:
     def test_creates_config(self, tmp_path):
-        with patch("satdeploy.demo.DEMO_DIR", tmp_path):
+        demo_config_path = tmp_path / ".demo-config.yaml"
+        with patch("satdeploy.demo.DEMO_DIR", tmp_path), \
+             patch("satdeploy.demo.DEMO_CONFIG_PATH", demo_config_path):
             _write_demo_config()
-            config_path = tmp_path / "config.yaml"
-            assert config_path.exists()
-            data = yaml.safe_load(config_path.read_text())
+            assert demo_config_path.exists()
+            data = yaml.safe_load(demo_config_path.read_text())
             assert data["name"] == "demo-satellite"
             assert data["transport"] == "csp"
             assert data["agent_node"] == DEMO_AGENT_NODE
@@ -288,7 +289,7 @@ class TestConfigDirEnvvar:
         runner = CliRunner()
         result = runner.invoke(
             main, ["config"],
-            env={"SATDEPLOY_CONFIG_DIR": str(config_dir)},
+            env={"SATDEPLOY_CONFIG": str(config_file)},
         )
         assert result.exit_code == 0
         assert "test-host" in result.output
@@ -316,8 +317,8 @@ class TestConfigDirEnvvar:
 
         runner = CliRunner()
         result = runner.invoke(
-            main, ["config", "--config-dir", str(flag_dir)],
-            env={"SATDEPLOY_CONFIG_DIR": str(env_dir)},
+            main, ["config", "--config", str(flag_dir / "config.yaml")],
+            env={"SATDEPLOY_CONFIG": str(env_dir / "config.yaml")},
         )
         assert result.exit_code == 0
         assert "flag-host" in result.output

@@ -6,10 +6,11 @@ from pathlib import Path
 
 import click
 
-from satdeploy.config import DEFAULT_CONFIG_DIR, Config, ModuleConfig, AppConfig
+from satdeploy.config import DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_FILE, Config, ModuleConfig, AppConfig
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
 from satdeploy.hash import compute_file_hash
+from satdeploy.provenance import capture_provenance, is_dirty
 from satdeploy.history import DeploymentRecord, History
 from satdeploy.output import success, warning, step, SYMBOLS, SatDeployError, ColoredGroup
 from satdeploy.services import ServiceManager, ServiceStatus
@@ -57,11 +58,28 @@ def get_transport(
         raise ValueError(f"Unknown transport type: {module.transport}")
 
 
-def get_history(config_dir: Path) -> History:
+def get_history(db_path: Path) -> History:
     """Get or create the history database."""
-    history = History(config_dir / "history.db")
+    history = History(db_path)
     history.init_db()
     return history
+
+
+def build_provenance_map(history: History, app: str) -> dict[str, str]:
+    """Build a mapping from binary hash to git provenance string.
+
+    Args:
+        history: The history database.
+        app: The app name to look up.
+
+    Returns:
+        Dict mapping binary_hash to git_hash provenance string.
+    """
+    prov_map = {}
+    for rec in history.get_history(app):
+        if rec.binary_hash and rec.git_hash and rec.binary_hash not in prov_map:
+            prov_map[rec.binary_hash] = rec.git_hash
+    return prov_map
 
 
 def format_iso_timestamp(iso_str: str | None) -> str:
@@ -251,14 +269,15 @@ def sync_service_file(
     return local_hash
 
 
-def config_dir_option(f):
-    """Shared --config-dir option with SATDEPLOY_CONFIG_DIR env var support."""
+def config_option(f):
+    """Shared --config option pointing to the config YAML file."""
     return click.option(
-        "--config-dir",
+        "--config",
+        "config_path",
         type=click.Path(path_type=Path),
         default=None,
-        envvar="SATDEPLOY_CONFIG_DIR",
-        help="Config directory (default: ~/.satdeploy)",
+        envvar="SATDEPLOY_CONFIG",
+        help="Config file (default: ~/.satdeploy/config.yaml)",
     )(f)
 
 
@@ -269,11 +288,10 @@ def main():
 
 
 @main.command()
-@config_dir_option
-def init(config_dir: Path | None):
+@config_option
+def init(config_path: Path | None):
     """Interactive setup, creates config.yaml."""
-    config_dir = config_dir or DEFAULT_CONFIG_DIR
-    config = Config(config_dir=config_dir)
+    config = Config(config_path=config_path)
 
     if config.config_path.exists():
         if not click.confirm("Config file already exists. Overwrite?"):
@@ -318,14 +336,7 @@ def init(config_dir: Path | None):
 
     data["backup_dir"] = "/opt/satdeploy/backups"
     data["max_backups"] = 10
-    data["apps"] = {
-        "example_app": {
-            "local": "/path/to/local/binary",
-            "remote": "/path/to/remote/binary",
-            "service": None,
-            "param": None,
-        },
-    }
+    data["apps"] = {}
 
     config.save(data)
     click.echo("")
@@ -342,24 +353,25 @@ def init(config_dir: Path | None):
     default=None,
     help="Override local path for the binary",
 )
-@config_dir_option
+@config_option
 @click.option("--dry-run", is_flag=True, help="Show what would happen without deploying")
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
+@click.option("--require-clean", is_flag=True, help="Refuse to deploy from dirty git tree")
 def push(
     apps: tuple[str, ...],
     all_apps: bool,
     clean_vmem: bool,
     local: str | None,
-    config_dir: Path | None,
+    config_path: Path | None,
     dry_run: bool,
     yes: bool,
+    require_clean: bool,
 ):
     """Deploy one or more apps to a target.
 
     APPS are the names of the applications to deploy.
     """
-    config_dir = config_dir or DEFAULT_CONFIG_DIR
-    config = Config(config_dir=config_dir)
+    config = Config(config_path=config_path)
 
     if config.load() is None:
         raise SatDeployError(
@@ -413,6 +425,22 @@ def push(
         click.echo("Run without --dry-run to deploy.")
         return
 
+    # Capture git provenance for each app (fail fast before connecting)
+    provenance_map = {}
+    for app_name in apps:
+        app_cfg = get_app_config_or_error(config, app_name)
+        local_path_prov = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
+        provenance = capture_provenance(local_path_prov)
+        provenance_map[app_name] = provenance
+
+        if require_clean and is_dirty(provenance):
+            raise SatDeployError(
+                "Refusing to deploy from dirty git tree. Commit your changes first."
+            )
+
+        if is_dirty(provenance):
+            click.echo(warning(f"Deploying from uncommitted changes — binary tagged as {provenance}"))
+
     # Confirmation prompt for multi-app deploys
     if len(apps) > 1 and not yes:
         target_name = module_config.zmq_endpoint if module_config.transport == "csp" else module_config.host
@@ -423,7 +451,7 @@ def push(
             click.echo("Aborted.")
             return
 
-    history = get_history(config_dir)
+    history = get_history(config.history_path)
 
     # CSP transport: use transport abstraction
     if module_config.transport == "csp":
@@ -467,6 +495,7 @@ def push(
                         except TransportError:
                             click.echo(warning(f"Health check: status query timed out"))
 
+                    provenance = provenance_map.get(app)
                     history.record(DeploymentRecord(
                         module=config.module_name,
                         app=app,
@@ -475,8 +504,10 @@ def push(
                         backup_path=result.backup_path,
                         action="push",
                         success=True,
+                        git_hash=provenance,
                     ))
-                    click.echo(success(f"Deployed {app} ({local_hash})"))
+                    provenance_display = f" ({provenance})" if provenance else ""
+                    click.echo(success(f"Deployed {app} ({local_hash}){provenance_display}"))
                 else:
                     history.record(DeploymentRecord(
                         module=config.module_name,
@@ -546,6 +577,7 @@ def push(
                         app_config, module_config,
                     )
 
+                provenance = provenance_map.get(app)
                 history.record(DeploymentRecord(
                     module=config.module_name,
                     app=app,
@@ -555,14 +587,16 @@ def push(
                     action="push",
                     success=True,
                     service_hash=service_hash,
+                    git_hash=provenance,
                 ))
 
+                provenance_display = f" ({provenance})" if provenance else ""
                 if result.skipped:
                     click.echo(warning(f"{app} ({local_hash}) is already deployed. Marked as current."))
                 elif result.restored:
                     click.echo(warning(f"{app} ({local_hash}) restored from backup. Marked as current."))
                 else:
-                    click.echo(success(f"Deployed {app} ({local_hash})"))
+                    click.echo(success(f"Deployed {app} ({local_hash}){provenance_display}"))
 
                 # Post-deploy health check for services
                 if service and hasattr(transport, 'service_manager') and transport.service_manager:
@@ -601,12 +635,15 @@ def push(
         transport.disconnect()
 
 
+# Alias: "satdeploy deploy" = "satdeploy push" (parity with CSH APM interface)
+main.add_command(push, 'deploy')
+
+
 @main.command()
-@config_dir_option
-def status(config_dir: Path | None):
+@config_option
+def status(config_path: Path | None):
     """Show status of deployed apps and services."""
-    config_dir = config_dir or DEFAULT_CONFIG_DIR
-    config = Config(config_dir=config_dir)
+    config = Config(config_path=config_path)
 
     if config.load() is None:
         raise SatDeployError(
@@ -615,12 +652,12 @@ def status(config_dir: Path | None):
 
     module_config = config.get_target()
     apps = config.apps
-    history = get_history(config_dir)
+    history = get_history(config.history_path)
 
     # CSP transport: use transport abstraction
     if module_config.transport == "csp":
         transport = get_transport(module_config, config.backup_dir)
-        click.echo(f"Target: {module_config.zmq_endpoint} (node {module_config.agent_node})")
+        click.echo(f"Target: node {module_config.agent_node}")
         click.echo("")
 
         if not apps:
@@ -650,19 +687,24 @@ def status(config_dir: Path | None):
                         status_text = "stopped"
                         status_color = "yellow"
 
-                    # Get timestamp from history
+                    # Get timestamp and git provenance from history
                     last_deploy = history.get_last_deployment(app_name)
                     timestamp_display = format_iso_timestamp(last_deploy.timestamp) if last_deploy and last_deploy.success else "-"
+                    git_prov = last_deploy.git_hash if last_deploy and last_deploy.success else None
                 else:
                     symbol = click.style(SYMBOLS["bullet"], fg="yellow")
                     status_text = "not deployed"
                     status_color = "yellow"
                     hash_display = "-"
                     timestamp_display = "-"
+                    git_prov = None
 
                 name_col = f"{app_name:<16}"
                 status_col = f"{status_text:<14}"
-                hash_col = f"{hash_display:<10}"
+                hash_text = hash_display
+                if git_prov:
+                    hash_text += f" ({git_prov})"
+                hash_col = f"{hash_text:<10}"
 
                 click.echo(
                     f"  {symbol} {name_col}\t"
@@ -703,14 +745,16 @@ def status(config_dir: Path | None):
                 # First check if file exists
                 deployed = ssh.file_exists(remote_path)
 
-                # Get hash and timestamp from history (only if actually deployed)
+                # Get hash, timestamp, and git provenance from history (only if actually deployed)
                 hash_display = "-"
                 timestamp_display = "-"
+                git_prov = None
                 if deployed:
                     last_deploy = history.get_last_deployment(app_name)
                     if last_deploy and last_deploy.success:
                         hash_display = last_deploy.binary_hash or "-"
                         timestamp_display = format_iso_timestamp(last_deploy.timestamp)
+                        git_prov = last_deploy.git_hash
 
                 if not deployed:
                     symbol = click.style(SYMBOLS["bullet"], fg="yellow")
@@ -744,7 +788,10 @@ def status(config_dir: Path | None):
                 # Pad plain text first, then colorize
                 name_col = f"{app_name:<16}"
                 status_col = f"{status_text:<14}"
-                hash_col = f"{hash_display:<10}"
+                hash_text = hash_display
+                if git_prov:
+                    hash_text += f" ({git_prov})"
+                hash_col = f"{hash_text:<10}"
                 timestamp_col = timestamp_display
 
                 click.echo(
@@ -760,8 +807,8 @@ def status(config_dir: Path | None):
 
 @main.command("list")
 @click.argument("app")
-@config_dir_option
-def list_backups(app: str, config_dir: Path | None):
+@config_option
+def list_backups(app: str, config_path: Path | None):
     """List all versions of an app (deployed + backups).
 
     APP is the name of the application to list versions for.
@@ -769,22 +816,21 @@ def list_backups(app: str, config_dir: Path | None):
     Shows the currently deployed version at the top, followed by
     all available backups that can be restored via rollback.
     """
-    config_dir = config_dir or DEFAULT_CONFIG_DIR
-    config = Config(config_dir=config_dir)
+    config = Config(config_path=config_path)
 
     if config.load() is None:
         raise SatDeployError(
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    app_config = get_app_config_or_error(config, app)
     module_config = config.get_target()
-    history = get_history(config_dir)
+    history = get_history(config.history_path)
 
     # Get currently deployed version from history
     last_deploy = history.get_last_deployment(app)
 
     # CSP transport: use transport abstraction
+    # No app config needed — the agent discovers apps dynamically
     if module_config.transport == "csp":
         transport = get_transport(module_config, config.backup_dir)
 
@@ -831,19 +877,25 @@ def list_backups(app: str, config_dir: Path | None):
             click.echo(click.style(header, fg="bright_black"))
             click.echo(click.style("    " + "-" * 45, fg="bright_black"))
 
+            git_hash_map = build_provenance_map(history, app)
+
             # Show all versions, arrow on deployed one
             for version in versions:
                 hash_display = version.get("hash") or "-"
                 timestamp_display = version.get("timestamp") or "-"
                 is_deployed = hash_display == current_hash
+                git_prov = git_hash_map.get(hash_display)
+                hash_text = hash_display
+                if git_prov:
+                    hash_text += f" ({git_prov})"
 
                 if is_deployed:
                     bullet = click.style(SYMBOLS["arrow"], fg="green")
-                    hash_col = click.style(f"{hash_display:<10}", fg="green")
+                    hash_col = click.style(f"{hash_text:<10}", fg="green")
                     status_col = click.style("deployed", fg="green")
                 else:
                     bullet = click.style(SYMBOLS["bullet"], fg="blue")
-                    hash_col = click.style(f"{hash_display:<10}", fg="blue")
+                    hash_col = click.style(f"{hash_text:<10}", fg="blue")
                     status_col = click.style("backup", fg="blue")
 
                 timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
@@ -856,7 +908,8 @@ def list_backups(app: str, config_dir: Path | None):
 
         return
 
-    # SSH transport: use direct SSH connection
+    # SSH transport: needs app config for remote path lookup
+    app_config = get_app_config_or_error(config, app)
     target = {"host": module_config.host, "user": module_config.user}
     with SSHClient(host=target["host"], user=target["user"]) as ssh:
         deployer = Deployer(
@@ -905,19 +958,25 @@ def list_backups(app: str, config_dir: Path | None):
             click.echo(click.style(header, fg="bright_black"))
             click.echo(click.style("    " + "-" * 45, fg="bright_black"))
 
+            git_hash_map = build_provenance_map(history, app)
+
             # Show all versions, arrow on deployed one
             for version in versions:
                 hash_display = version.get("hash") or "-"
                 timestamp_display = version.get("timestamp") or "-"
                 is_deployed = hash_display == current_hash
+                git_prov = git_hash_map.get(hash_display)
+                hash_text = hash_display
+                if git_prov:
+                    hash_text += f" ({git_prov})"
 
                 if is_deployed:
                     bullet = click.style(SYMBOLS["arrow"], fg="green")
-                    hash_col = click.style(f"{hash_display:<10}", fg="green")
+                    hash_col = click.style(f"{hash_text:<10}", fg="green")
                     status_col = click.style("deployed", fg="green")
                 else:
                     bullet = click.style(SYMBOLS["bullet"], fg="blue")
-                    hash_col = click.style(f"{hash_display:<10}", fg="blue")
+                    hash_col = click.style(f"{hash_text:<10}", fg="blue")
                     status_col = click.style("backup", fg="blue")
 
                 timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
@@ -930,31 +989,27 @@ def list_backups(app: str, config_dir: Path | None):
 @main.command()
 @click.argument("app")
 @click.argument("hash", required=False, default=None)
-@config_dir_option
-def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
+@config_option
+def rollback(app: str, hash: str | None, config_path: Path | None):  # noqa: A002
     """Rollback to a previous version.
 
     APP is the name of the application to rollback.
     HASH is the optional backup hash to restore (defaults to previous version).
     """
     target_hash = hash  # Rename to avoid shadowing builtin
-    config_dir = config_dir or DEFAULT_CONFIG_DIR
-    config = Config(config_dir=config_dir)
+    config = Config(config_path=config_path)
 
     if config.load() is None:
         raise SatDeployError(
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    app_config = get_app_config_or_error(config, app)
-
-    remote_path = app_config.remote
-    service = app_config.service
     module_config = config.get_target()
-    history = get_history(config_dir)
+    history = get_history(config.history_path)
     backup_path = None
 
     # CSP transport: use transport abstraction
+    # No app config needed — the agent handles rollback internally
     if module_config.transport == "csp":
         transport = get_transport(module_config, config.backup_dir)
         click.echo(f"Connecting to {module_config.zmq_endpoint}...")
@@ -975,17 +1030,20 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
                     module=config.module_name,
                     app=app,
                     binary_hash=actual_hash,
-                    remote_path=remote_path,
+                    remote_path="",
                     action="rollback",
                     success=True,
                 ))
-                click.echo(success(f"Rolled back {app}"))
+                if actual_hash:
+                    click.echo(success(f"Rolled back {app} to {actual_hash}"))
+                else:
+                    click.echo(success(f"Rolled back {app}"))
             else:
                 history.record(DeploymentRecord(
                     module=config.module_name,
                     app=app,
                     binary_hash="",
-                    remote_path=remote_path,
+                    remote_path="",
                     action="rollback",
                     success=False,
                     error_message=result.error_message,
@@ -997,7 +1055,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
                 module=config.module_name,
                 app=app,
                 binary_hash="",
-                remote_path=remote_path,
+                remote_path="",
                 action="rollback",
                 success=False,
                 error_message=str(e),
@@ -1008,7 +1066,10 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
 
         return
 
-    # SSH transport: use direct SSH connection
+    # SSH transport: needs app config for remote path and service management
+    app_config = get_app_config_or_error(config, app)
+    remote_path = app_config.remote
+    service = app_config.service
     target = {"host": module_config.host, "user": module_config.user}
     click.echo(f"Connecting to {target['host']}...")
 
@@ -1129,52 +1190,53 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
 
 
 @main.command()
-@config_dir_option
-def config(config_dir: Path | None):
+@config_option
+def config(config_path: Path | None):
     """Show current configuration."""
-    config_dir = config_dir or DEFAULT_CONFIG_DIR
-    cfg = Config(config_dir=config_dir)
+    cfg = Config(config_path=config_path)
 
     if cfg.load() is None:
         raise SatDeployError(
             f"Config not found at {cfg.config_path}. Run 'satdeploy init' first."
         )
 
-    click.echo(click.style(f"Config: {cfg.config_path}", bold=True))
-    click.echo("")
+    click.echo(f"Config file: {cfg.config_path}")
 
     module = cfg.get_target()
-    click.echo(f"  name:        {module.name}")
-    click.echo(f"  transport:   {module.transport}")
 
+    # Defaults block (matches APM format)
+    click.echo(f"\nDefaults:")
+    if module.appsys_node:
+        click.echo(f"  appsys_node: {module.appsys_node}")
+    else:
+        click.echo(f"  appsys_node: 0 (restart disabled)")
+
+    # Transport block (Python CLI-specific, APM doesn't need this)
+    click.echo(f"\nTransport:")
+    click.echo(f"  type:          {module.transport}")
     if module.transport == "ssh":
-        click.echo(f"  host:        {module.host}")
-        click.echo(f"  user:        {module.user}")
+        click.echo(f"  host:          {module.host}")
+        click.echo(f"  user:          {module.user}")
     elif module.transport == "csp":
-        click.echo(f"  zmq_endpoint: {module.zmq_endpoint}")
-        click.echo(f"  agent_node:  {module.agent_node}")
-        click.echo(f"  ground_node: {module.ground_node}")
-        if module.appsys_node:
-            click.echo(f"  appsys_node: {module.appsys_node}")
-
-    click.echo(f"  backup_dir:  {cfg.backup_dir}")
-    click.echo(f"  max_backups: {cfg.max_backups}")
-    click.echo("")
+        click.echo(f"  zmq_endpoint:  {module.zmq_endpoint}")
+        click.echo(f"  agent_node:    {module.agent_node}")
+        click.echo(f"  ground_node:   {module.ground_node}")
+    click.echo(f"  backup_dir:    {cfg.backup_dir}")
 
     apps = cfg.apps
+    click.echo(f"\nApps: {len(apps) if apps else 0}")
     if not apps:
-        click.echo("Apps: (none)")
+        click.echo("  (none configured)")
         return
 
-    click.echo(f"Apps ({len(apps)}):")
     for app_name, app_data in apps.items():
         click.echo(f"  {app_name}:")
-        click.echo(f"    local:   {app_data.get('local', '-')}")
-        click.echo(f"    remote:  {app_data.get('remote', '-')}")
+        click.echo(f"    local:       {app_data.get('local', '-')}")
+        click.echo(f"    remote:      {app_data.get('remote', '-')}")
         if app_data.get("service"):
-            click.echo(f"    service: {app_data['service']}")
+            click.echo(f"    service:     {app_data['service']}")
         if app_data.get("param"):
-            click.echo(f"    param:   {app_data['param']}")
+            click.echo(f"    param:       {app_data['param']}")
 
 
 @main.command()
@@ -1186,14 +1248,13 @@ def config(config_dir: Path | None):
     default=100,
     help="Number of lines to show (default: 100)",
 )
-@config_dir_option
-def logs(app: str, lines: int, config_dir: Path | None):
+@config_option
+def logs(app: str, lines: int, config_path: Path | None):
     """Show logs for an app's service.
 
     APP is the name of the application to show logs for.
     """
-    config_dir = config_dir or DEFAULT_CONFIG_DIR
-    config = Config(config_dir=config_dir)
+    config = Config(config_path=config_path)
 
     if config.load() is None:
         raise SatDeployError(

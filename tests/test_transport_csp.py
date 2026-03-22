@@ -1,6 +1,7 @@
 """Tests for the CSP transport implementation."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
+import struct
 import pytest
 import zmq as real_zmq
 
@@ -11,7 +12,7 @@ from satdeploy.transport.base import (
     AppStatus,
     BackupInfo,
 )
-from satdeploy.transport.csp import CSPTransport
+from satdeploy.transport.csp import CSPTransport, CSP_HEADER_SIZE
 from satdeploy.csp.proto import DeployCommand, DeployRequest, DeployResponse
 
 
@@ -19,31 +20,56 @@ from satdeploy.csp.proto import DeployCommand, DeployRequest, DeployResponse
 def mock_zmq():
     """Create ZMQ mock that preserves exception classes."""
     with patch("satdeploy.transport.csp.zmq") as mock:
-        # Preserve real exception classes for proper exception handling
+        # Preserve real exception classes and constants
         mock.Again = real_zmq.Again
         mock.ZMQError = real_zmq.ZMQError
-        mock.DEALER = real_zmq.DEALER
+        mock.PUB = real_zmq.PUB
+        mock.SUB = real_zmq.SUB
+        mock.SUBSCRIBE = real_zmq.SUBSCRIBE
+        mock.LINGER = real_zmq.LINGER
         mock.RCVTIMEO = real_zmq.RCVTIMEO
         mock.SNDTIMEO = real_zmq.SNDTIMEO
         mock.NOBLOCK = real_zmq.NOBLOCK
 
-        # Setup default context/socket
+        # Setup default context with separate pub/sub sockets
         mock_context = MagicMock()
-        mock_socket = MagicMock()
+        mock_pub = MagicMock()
+        mock_sub = MagicMock()
+
+        def socket_factory(socket_type):
+            if socket_type == real_zmq.PUB:
+                return mock_pub
+            elif socket_type == real_zmq.SUB:
+                return mock_sub
+            return MagicMock()
+
         mock.Context.return_value = mock_context
-        mock_context.socket.return_value = mock_socket
+        mock_context.socket.side_effect = socket_factory
 
         # Store references for tests
         mock._context = mock_context
-        mock._socket = mock_socket
+        mock._pub = mock_pub
+        mock._sub = mock_sub
 
         yield mock
 
 
 def make_csp_response(response: DeployResponse) -> bytes:
-    """Wrap a protobuf response with a CSP header for testing."""
-    # 4-byte CSP header (dummy values for testing)
-    header = b'\x00\x00\x00\x00'
+    """Wrap a protobuf response with a CSP v2 header for testing.
+
+    Builds a realistic header with sport=20 (CSP_DEPLOY_PORT) so the
+    CSPTransport's port filter accepts it.
+    """
+    import struct
+    # pri=2, dst=40, src=5425, dport=0, sport=20 (deploy port)
+    id2 = (
+        (2 & 0x3) << 46 |
+        (40 & 0x3FFF) << 32 |
+        (5425 & 0x3FFF) << 18 |
+        (0 & 0x3F) << 12 |
+        (20 & 0x3F) << 6
+    )
+    header = struct.pack(">Q", id2 << 16)[:6]
     return header + response.SerializeToString()
 
 
@@ -64,58 +90,146 @@ class TestCSPTransportInterface:
     def test_csp_transport_instantiation(self):
         """CSPTransport can be instantiated with required params."""
         transport = CSPTransport(
-            zmq_endpoint="tcp://localhost:4040",
+            zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
-            ground_node=4040,
+            ground_node=40,
             backup_dir="/opt/satdeploy/backups",
         )
-        assert transport.zmq_endpoint == "tcp://localhost:4040"
+        assert transport.zmq_endpoint == "tcp://localhost:6000"
+        assert transport.zmq_host == "localhost"
         assert transport.agent_node == 5424
-        assert transport.ground_node == 4040
+        assert transport.ground_node == 40
+
+    def test_zmq_host_parsing(self):
+        """Host is extracted from various zmq_endpoint formats."""
+        t1 = CSPTransport(zmq_endpoint="tcp://192.168.1.5:6000",
+                          agent_node=1, ground_node=2, backup_dir="/b")
+        assert t1.zmq_host == "192.168.1.5"
+
+        t2 = CSPTransport(zmq_endpoint="tcp://satcom:4040",
+                          agent_node=1, ground_node=2, backup_dir="/b")
+        assert t2.zmq_host == "satcom"
+
+        t3 = CSPTransport(zmq_endpoint="localhost",
+                          agent_node=1, ground_node=2, backup_dir="/b")
+        assert t3.zmq_host == "localhost"
 
 
 class TestCSPTransportConnection:
     """Test CSP connection handling."""
 
-    def test_connect_creates_zmq_socket(self, mock_zmq):
-        """connect() establishes ZMQ connection."""
+    def test_connect_creates_pub_sub_sockets(self, mock_zmq):
+        """connect() creates PUB and SUB sockets through zmqproxy."""
         transport = CSPTransport(
-            zmq_endpoint="tcp://localhost:4040",
+            zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
-            ground_node=4040,
+            ground_node=40,
             backup_dir="/backups",
         )
         transport.connect()
 
         mock_zmq.Context.assert_called_once()
-        mock_zmq._context.socket.assert_called()
+        # Should create both PUB and SUB sockets
+        assert mock_zmq._context.socket.call_count == 2
+        mock_zmq._pub.connect.assert_called_with("tcp://localhost:9600")
+        mock_zmq._sub.connect.assert_called_with("tcp://localhost:9601")
 
-    def test_disconnect_closes_zmq_socket(self, mock_zmq):
-        """disconnect() closes ZMQ connection."""
+    def test_connect_sets_sub_filters(self, mock_zmq):
+        """connect() subscribes to packets for our ground node."""
         transport = CSPTransport(
-            zmq_endpoint="tcp://localhost:4040",
+            zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
-            ground_node=4040,
+            ground_node=40,
+            backup_dir="/backups",
+        )
+        transport.connect()
+
+        # Should subscribe for all 4 priority levels
+        subscribe_calls = [
+            c for c in mock_zmq._sub.setsockopt.call_args_list
+            if c[0][0] == real_zmq.SUBSCRIBE
+        ]
+        assert len(subscribe_calls) == 4
+
+        # Verify filter format: big-endian uint16 = (priority << 14) | ground_node
+        for pri in range(4):
+            expected_filter = struct.pack(">H", (pri << 14) | 40)
+            assert call(real_zmq.SUBSCRIBE, expected_filter) in mock_zmq._sub.setsockopt.call_args_list
+
+    def test_disconnect_closes_both_sockets(self, mock_zmq):
+        """disconnect() closes PUB and SUB with linger=0."""
+        transport = CSPTransport(
+            zmq_endpoint="tcp://localhost:6000",
+            agent_node=5424,
+            ground_node=40,
             backup_dir="/backups",
         )
         transport.connect()
         transport.disconnect()
 
-        mock_zmq._socket.close.assert_called()
+        mock_zmq._pub.close.assert_called_with(linger=0)
+        mock_zmq._sub.close.assert_called_with(linger=0)
 
     def test_context_manager(self, mock_zmq):
         """CSPTransport works as context manager."""
         transport = CSPTransport(
-            zmq_endpoint="tcp://localhost:4040",
+            zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
-            ground_node=4040,
+            ground_node=40,
             backup_dir="/backups",
         )
 
         with transport:
             pass
 
-        mock_zmq._socket.close.assert_called()
+        mock_zmq._pub.close.assert_called_with(linger=0)
+        mock_zmq._sub.close.assert_called_with(linger=0)
+
+
+class TestCSPV2Header:
+    """Test CSP v2 header encoding/decoding."""
+
+    def test_header_is_6_bytes(self):
+        """CSP v2 header is 6 bytes."""
+        transport = CSPTransport(
+            zmq_endpoint="localhost",
+            agent_node=5425,
+            ground_node=40,
+            backup_dir="/backups",
+        )
+        header = transport._build_csp_header(dest=5425, dest_port=20)
+        assert len(header) == 6
+
+    def test_header_roundtrip(self):
+        """Build and parse produces same values."""
+        transport = CSPTransport(
+            zmq_endpoint="localhost",
+            agent_node=5425,
+            ground_node=40,
+            backup_dir="/backups",
+        )
+        header = transport._build_csp_header(dest=5425, dest_port=20, src_port=15)
+        parsed = CSPTransport._parse_csp_header(header)
+
+        assert parsed["dst"] == 5425
+        assert parsed["src"] == 40
+        assert parsed["dport"] == 20
+        assert parsed["sport"] == 15
+        assert parsed["pri"] == 2  # Normal priority
+
+    def test_header_14bit_addresses(self):
+        """CSP v2 supports 14-bit node addresses (up to 16383)."""
+        transport = CSPTransport(
+            zmq_endpoint="localhost",
+            agent_node=10000,
+            ground_node=8000,
+            backup_dir="/backups",
+        )
+        header = transport._build_csp_header(dest=10000, dest_port=20)
+        parsed = CSPTransport._parse_csp_header(header)
+
+        assert parsed["dst"] == 10000
+        assert parsed["src"] == 8000
 
 
 class TestCSPTransportDeploy:
@@ -123,20 +237,18 @@ class TestCSPTransportDeploy:
 
     def test_deploy_sends_command(self, mock_zmq, mock_dtp, tmp_path):
         """deploy() sends CMD_DEPLOY to agent."""
-        # Create a test binary
         binary = tmp_path / "test_app"
         binary.write_bytes(b"test binary content")
 
-        # Mock successful response
         response = DeployResponse()
         response.success = True
         response.backup_path = "/backups/app/123.bak"
-        mock_zmq._socket.recv.return_value = make_csp_response(response)
+        mock_zmq._sub.recv.return_value = make_csp_response(response)
 
         transport = CSPTransport(
-            zmq_endpoint="tcp://localhost:4040",
+            zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
-            ground_node=4040,
+            ground_node=40,
             backup_dir="/backups",
         )
         transport.connect()
@@ -152,7 +264,7 @@ class TestCSPTransportDeploy:
 
         assert result.success is True
         assert result.backup_path == "/backups/app/123.bak"
-        # Verify DTP server was started and stopped
+        mock_zmq._pub.send.assert_called_once()
         mock_dtp.return_value.start.assert_called_once()
         mock_dtp.return_value.stop.assert_called_once()
 
@@ -161,17 +273,16 @@ class TestCSPTransportDeploy:
         binary = tmp_path / "test_app"
         binary.write_bytes(b"test binary content")
 
-        # Mock failure response
         response = DeployResponse()
         response.success = False
-        response.error_code = 6  # ERR_CHECKSUM_MISMATCH
+        response.error_code = 6
         response.error_message = "Checksum verification failed"
-        mock_zmq._socket.recv.return_value = make_csp_response(response)
+        mock_zmq._sub.recv.return_value = make_csp_response(response)
 
         transport = CSPTransport(
-            zmq_endpoint="tcp://localhost:4040",
+            zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
-            ground_node=4040,
+            ground_node=40,
             backup_dir="/backups",
         )
         transport.connect()
@@ -194,12 +305,12 @@ class TestCSPTransportRollback:
         """rollback() sends CMD_ROLLBACK to agent."""
         response = DeployResponse()
         response.success = True
-        mock_zmq._socket.recv.return_value = make_csp_response(response)
+        mock_zmq._sub.recv.return_value = make_csp_response(response)
 
         transport = CSPTransport(
-            zmq_endpoint="tcp://localhost:4040",
+            zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
-            ground_node=4040,
+            ground_node=40,
             backup_dir="/backups",
         )
         transport.connect()
@@ -207,8 +318,7 @@ class TestCSPTransportRollback:
         result = transport.rollback(app_name="dipp")
 
         assert result.success is True
-        # Verify command was sent
-        mock_zmq._socket.send.assert_called_once()
+        mock_zmq._pub.send.assert_called_once()
 
 
 class TestCSPTransportStatus:
@@ -223,12 +333,12 @@ class TestCSPTransportStatus:
         app_status.running = True
         app_status.binary_hash = "abc12345"
         app_status.remote_path = "/usr/bin/dipp"
-        mock_zmq._socket.recv.return_value = make_csp_response(response)
+        mock_zmq._sub.recv.return_value = make_csp_response(response)
 
         transport = CSPTransport(
-            zmq_endpoint="tcp://localhost:4040",
+            zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
-            ground_node=4040,
+            ground_node=40,
             backup_dir="/backups",
         )
         transport.connect()
@@ -252,12 +362,12 @@ class TestCSPTransportListBackups:
         backup.timestamp = "2025-01-15 14:30:22"
         backup.hash = "abc12345"
         backup.path = "/backups/dipp/20250115-143022-abc12345.bak"
-        mock_zmq._socket.recv.return_value = make_csp_response(response)
+        mock_zmq._sub.recv.return_value = make_csp_response(response)
 
         transport = CSPTransport(
-            zmq_endpoint="tcp://localhost:4040",
+            zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
-            ground_node=4040,
+            ground_node=40,
             backup_dir="/backups",
         )
         transport.connect()
@@ -277,12 +387,12 @@ class TestCSPTransportVerify:
         response = DeployResponse()
         response.success = True
         response.actual_checksum = "abc12345"
-        mock_zmq._socket.recv.return_value = make_csp_response(response)
+        mock_zmq._sub.recv.return_value = make_csp_response(response)
 
         transport = CSPTransport(
-            zmq_endpoint="tcp://localhost:4040",
+            zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
-            ground_node=4040,
+            ground_node=40,
             backup_dir="/backups",
         )
         transport.connect()

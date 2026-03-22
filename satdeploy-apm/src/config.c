@@ -157,6 +157,10 @@ satdeploy_config_t *satdeploy_config_load(void)
                 } else if (strcmp(value, "modules") == 0) {
                     /* Legacy Python satdeploy format */
                     state = STATE_MODULES;
+                } else {
+                    /* Read flat top-level fields (Python CLI format) */
+                    safe_strcpy(current_key, value, sizeof(current_key));
+                    state = STATE_DEFAULTS_KEY;  /* reuse defaults value handler */
                 }
             } else if (state == STATE_DEFAULTS) {
                 safe_strcpy(current_key, value, sizeof(current_key));

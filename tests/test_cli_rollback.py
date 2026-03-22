@@ -49,7 +49,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -65,7 +65,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "unknown_app", "--config-dir", str(config_dir)],
+            ["rollback", "unknown_app", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -101,7 +101,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -139,7 +139,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "def67890", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "def67890", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -172,7 +172,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -208,7 +208,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "zzzzzzzz", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "zzzzzzzz", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -244,7 +244,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -290,7 +290,7 @@ class TestRollbackWithDependencies:
 
         result = runner.invoke(
             main,
-            ["rollback", "csp_server", "--config-dir", str(config_dir)],
+            ["rollback", "csp_server", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -333,7 +333,7 @@ class TestRollbackHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -379,7 +379,7 @@ class TestRollbackHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -421,7 +421,7 @@ class TestRollbackHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -465,7 +465,7 @@ class TestRollbackHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -510,7 +510,7 @@ class TestRollbackPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
             color=True,
         )
 
@@ -548,7 +548,7 @@ class TestRollbackPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
             color=True,
         )
 
@@ -585,7 +585,7 @@ class TestRollbackPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -648,7 +648,7 @@ class TestRollbackDialBehavior:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -701,7 +701,7 @@ class TestRollbackDialBehavior:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         # Should warn (not error) because we're at the oldest version
@@ -753,7 +753,7 @@ class TestRollbackDialBehavior:
         # Explicitly request C by hash even though we're at A (oldest)
         result = runner.invoke(
             main,
-            ["rollback", "controller", "cccccccc", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "cccccccc", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -794,7 +794,7 @@ class TestRollbackByHash:
         # Rollback by hash only (not full version string)
         result = runner.invoke(
             main,
-            ["rollback", "controller", "bbbbbbbb", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "bbbbbbbb", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0

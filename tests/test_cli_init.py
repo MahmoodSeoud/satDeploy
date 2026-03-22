@@ -28,7 +28,7 @@ class TestInitCommand:
 
         result = runner.invoke(
             main,
-            ["init", "--config-dir", str(config_dir)],
+            ["init", "--config", str(config_dir / "config.yaml")],
             input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
         )
 
@@ -42,7 +42,7 @@ class TestInitCommand:
 
         result = runner.invoke(
             main,
-            ["init", "--config-dir", str(config_dir)],
+            ["init", "--config", str(config_dir / "config.yaml")],
             input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
         )
 
@@ -55,7 +55,7 @@ class TestInitCommand:
 
         result = runner.invoke(
             main,
-            ["init", "--config-dir", str(config_dir)],
+            ["init", "--config", str(config_dir / "config.yaml")],
             input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
         )
 
@@ -68,7 +68,7 @@ class TestInitCommand:
 
         runner.invoke(
             main,
-            ["init", "--config-dir", str(config_dir)],
+            ["init", "--config", str(config_dir / "config.yaml")],
             input="som1\n\n10.0.0.100\nadmin\n",  # name, transport(ssh), host, user
         )
 
@@ -87,7 +87,7 @@ class TestInitCommand:
 
         runner.invoke(
             main,
-            ["init", "--config-dir", str(config_dir)],
+            ["init", "--config", str(config_dir / "config.yaml")],
             input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
         )
 
@@ -96,8 +96,7 @@ class TestInitCommand:
 
         assert config["backup_dir"] == "/opt/satdeploy/backups"
         assert config["max_backups"] == 10
-        assert "example_app" in config["apps"]
-        assert config["apps"]["example_app"]["service"] is None
+        assert config["apps"] == {}
 
     def test_init_csp_transport(self, tmp_path):
         """Init should support CSP transport configuration."""
@@ -106,7 +105,7 @@ class TestInitCommand:
 
         runner.invoke(
             main,
-            ["init", "--config-dir", str(config_dir)],
+            ["init", "--config", str(config_dir / "config.yaml")],
             # name, csp, zmq_endpoint, agent_node, ground_node, appsys_node
             input="sat1\ncsp\ntcp://localhost:4040\n5424\n4040\n10\n",
         )
@@ -130,7 +129,7 @@ class TestInitCommand:
 
         result = runner.invoke(
             main,
-            ["init", "--config-dir", str(config_dir)],
+            ["init", "--config", str(config_dir / "config.yaml")],
             input="n\n",  # Don't overwrite
         )
 
@@ -146,7 +145,7 @@ class TestInitCommand:
 
         result = runner.invoke(
             main,
-            ["init", "--config-dir", str(config_dir)],
+            ["init", "--config", str(config_dir / "config.yaml")],
             input="y\n\n\n192.168.1.50\nroot\n",  # Overwrite, name(default), transport(ssh), host, user
         )
 
@@ -164,7 +163,7 @@ class TestInitPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["init", "--config-dir", str(config_dir)],
+            ["init", "--config", str(config_dir / "config.yaml")],
             input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
             color=True,
         )

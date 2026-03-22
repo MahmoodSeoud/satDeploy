@@ -19,6 +19,9 @@ class DeployResult:
     backup_path: Optional[str] = None
     error_code: Optional[int] = None
     error_message: Optional[str] = None
+    binary_hash: Optional[str] = None
+    skipped: bool = False
+    restored: bool = False
 
 
 @dataclass
@@ -80,6 +83,7 @@ class Transport(ABC):
         appsys_node: Optional[int] = None,
         run_node: Optional[int] = None,
         expected_checksum: Optional[str] = None,
+        services: Optional[list[tuple[str, str]]] = None,
     ) -> DeployResult:
         """Deploy a binary to the target.
 
@@ -91,6 +95,8 @@ class Transport(ABC):
             appsys_node: For CSP: the app-sys-manager CSP node address.
             run_node: For CSP: the CSP node address where app runs.
             expected_checksum: Expected SHA256 checksum (first 8 chars).
+            services: For SSH: list of (app_name, service_name) tuples to
+                stop/start in dependency order.
 
         Returns:
             DeployResult indicating success/failure and backup path.

@@ -27,7 +27,9 @@ class ModuleConfig:
     zmq_endpoint: Optional[str] = None
     agent_node: Optional[int] = None
     appsys_node: Optional[int] = None
-    ground_node: int = 4040  # Default ground station node address
+    ground_node: int = 40  # Default ground station node address
+    zmq_pub_port: int = 9600  # zmqproxy subscribe port (TX)
+    zmq_sub_port: int = 9601  # zmqproxy publish port (RX)
 
     # Common fields
     csp_addr: int = 0
@@ -61,6 +63,7 @@ class AppConfig:
     param: str | None = None  # libparam name (e.g., "mng_dipp")
 
 DEFAULT_CONFIG_DIR = Path.home() / ".satdeploy"
+DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.yaml"
 
 
 class Config:
@@ -70,21 +73,35 @@ class Config:
 
         name: som1
         transport: csp
-        zmq_endpoint: tcp://localhost:4040
+        zmq_endpoint: tcp://localhost:9600
         agent_node: 5425
         ...
         apps:
           dipp: ...
     """
 
-    def __init__(self, config_dir: Optional[Path] = None):
-        self._config_dir = config_dir or DEFAULT_CONFIG_DIR
+    def __init__(self, config_path: Optional[Path] = None):
+        self._config_path = Path(config_path) if config_path else DEFAULT_CONFIG_FILE
         self._data: Optional[dict] = None
 
     @property
     def config_path(self) -> Path:
-        """Path to the config.yaml file."""
-        return self._config_dir / "config.yaml"
+        """Path to the config YAML file."""
+        return self._config_path
+
+    @property
+    def history_path(self) -> Path:
+        """Path to the history database, derived from the config filename.
+
+        ~/.satdeploy/config.yaml      -> ~/.satdeploy/history.db
+        ~/.satdeploy/.demo-config.yaml -> ~/.satdeploy/.demo-history.db
+        """
+        stem = self._config_path.stem  # "config" or ".demo-config"
+        if stem.endswith("-config"):
+            db_name = stem[:-7] + "-history.db"  # ".demo-config" -> ".demo-history.db"
+        else:
+            db_name = "history.db"
+        return self._config_path.parent / db_name
 
     def load(self) -> Optional[dict]:
         """Load configuration from disk.
@@ -100,6 +117,16 @@ class Config:
 
         with open(self.config_path) as f:
             self._data = yaml.safe_load(f)
+
+        # Merge APM-style `defaults:` block into top level so both formats work.
+        # Top-level fields take precedence over defaults.
+        if self._data and "defaults" in self._data:
+            defaults = self._data.pop("defaults")
+            if isinstance(defaults, dict):
+                for key, value in defaults.items():
+                    if key not in self._data:
+                        self._data[key] = value
+
         return self._data
 
     def save(self, data: dict) -> None:
@@ -110,7 +137,7 @@ class Config:
         Args:
             data: The configuration dictionary to save.
         """
-        self._config_dir.mkdir(parents=True, exist_ok=True)
+        self._config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.config_path, "w") as f:
             yaml.dump(data, f, default_flow_style=False)
         self._data = data
@@ -180,7 +207,9 @@ class Config:
             zmq_endpoint=self._data.get("zmq_endpoint"),
             agent_node=self._data.get("agent_node"),
             appsys_node=self._data.get("appsys_node"),
-            ground_node=self._data.get("ground_node", 4040),
+            ground_node=self._data.get("ground_node", 40),
+            zmq_pub_port=self._data.get("zmq_pub_port", 9600),
+            zmq_sub_port=self._data.get("zmq_sub_port", 9601),
             # Common fields
             csp_addr=self._data.get("csp_addr", 0),
             netmask=appsys.get("netmask", 0),

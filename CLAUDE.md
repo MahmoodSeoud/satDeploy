@@ -103,18 +103,23 @@ Ground station csh module providing:
 
 ```bash
 satdeploy init                      # Interactive setup
-satdeploy push <app>                # Deploy binary
-satdeploy push <app> --local ./path # Deploy with path override
-satdeploy push --all                # Deploy all apps
-satdeploy status                    # Show all app statuses
+satdeploy deploy <app>              # Deploy binary (alias: push)
+satdeploy deploy <app> --local ./path # Deploy with path override
+satdeploy deploy --all              # Deploy all apps
+satdeploy deploy --require-clean    # Refuse to deploy from dirty git tree
+satdeploy status                    # Show all app statuses with git provenance
 satdeploy list <app>                # List versions (deployed + backups)
 satdeploy rollback <app>            # Restore previous version
 satdeploy rollback <app> <hash>     # Restore specific version
 satdeploy logs <app>                # Show service logs
 satdeploy config                    # Show current config
+satdeploy demo start                # Start simulated satellite (Docker)
+satdeploy demo stop                 # Stop simulator
+satdeploy demo watch                # Stream agent logs
+satdeploy demo eject                # Generate config for real hardware
 
-# Switch targets with --config-dir
-satdeploy status --config-dir ~/.satdeploy/som2
+# Switch targets with --config
+satdeploy status --config ~/.satdeploy/som2/config.yaml
 ```
 
 ## Config Structure
@@ -124,8 +129,8 @@ Each target gets its own config directory (e.g. `~/.satdeploy/som1/config.yaml`)
 ```yaml
 name: som1
 transport: csp
-zmq_endpoint: tcp://localhost:4040
-agent_node: 5424
+zmq_endpoint: tcp://localhost:9600
+agent_node: 5425
 ground_node: 4040
 appsys_node: 10
 
@@ -196,4 +201,4 @@ Test files mock SSH/CSP connections - no real network calls.
 ### Backup Naming
 Files are named: `{YYYYMMDD}-{HHMMSS}-{hash8}.bak`
 
-Hash is first 8 chars of SHA256 (SSH) or FNV-1a (CSP/agent).
+Hash is first 8 chars of SHA256 (all components: ground, agent, APM).

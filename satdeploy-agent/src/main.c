@@ -53,15 +53,19 @@ static void print_usage(const char *prog) {
     printf("  -a, --address ADDR     CSP node address (default: %d)\n", DEFAULT_NODE_ADDR);
     printf("  -b, --baudrate BAUD    Baudrate for KISS (default: %d)\n", DEFAULT_BAUDRATE);
     printf("  -m, --netmask MASK     CSP netmask (default: %d)\n", DEFAULT_NETMASK);
+    printf("  -S, --sub-port PORT    ZMQ proxy subscribe port (default: 6000)\n");
+    printf("  -P, --pub-port PORT    ZMQ proxy publish port (default: 7000)\n");
     printf("  -h, --help             Show this help\n");
     printf("\nExamples:\n");
-    printf("  %s -i ZMQ -p localhost -a 5425      # ZMQ for testing\n", prog);
-    printf("  %s -i CAN -p can0 -a 5425           # CAN for satellite\n", prog);
-    printf("  %s -i KISS -p /dev/ttyS1 -a 5425    # KISS serial\n", prog);
+    printf("  %s -i ZMQ -p localhost -a 5425                    # ZMQ defaults\n", prog);
+    printf("  %s -i ZMQ -p zmqproxy -S 9600 -P 9601            # Custom ports\n", prog);
+    printf("  %s -i CAN -p can0 -a 5425                        # CAN for satellite\n", prog);
+    printf("  %s -i KISS -p /dev/ttyS1 -a 5425                 # KISS serial\n", prog);
 }
 
 static csp_iface_t *iface_init(const char *interface, const char *port,
-                                int node_addr, int netmask, uint32_t baudrate) {
+                                int node_addr, int netmask, uint32_t baudrate,
+                                uint16_t zmq_sub_port, uint16_t zmq_pub_port) {
     csp_iface_t *iface = NULL;
 
     if (strcmp(interface, "ZMQ") == 0) {
@@ -73,8 +77,8 @@ static csp_iface_t *iface_init(const char *interface, const char *port,
             true,   /* promisc */
             &iface,
             NULL,   /* via table */
-            CSP_ZMQPROXY_SUBSCRIBE_PORT,
-            CSP_ZMQPROXY_PUBLISH_PORT
+            zmq_sub_port,
+            zmq_pub_port
         );
 
         if (result != CSP_ERR_NONE || iface == NULL) {
@@ -141,6 +145,8 @@ int main(int argc, char *argv[]) {
         {"address", required_argument, 0, 'a'},
         {"baudrate", required_argument, 0, 'b'},
         {"netmask", required_argument, 0, 'm'},
+        {"sub-port", required_argument, 0, 'S'},
+        {"pub-port", required_argument, 0, 'P'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
@@ -150,9 +156,11 @@ int main(int argc, char *argv[]) {
     int node_addr = DEFAULT_NODE_ADDR;
     int netmask = DEFAULT_NETMASK;
     uint32_t baudrate = DEFAULT_BAUDRATE;
+    uint16_t zmq_sub_port = CSP_ZMQPROXY_SUBSCRIBE_PORT;
+    uint16_t zmq_pub_port = CSP_ZMQPROXY_PUBLISH_PORT;
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "i:p:a:b:m:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "i:p:a:b:m:S:P:h", long_options, NULL)) != -1) {
         switch (opt) {
             case 'i':
                 interface = optarg;
@@ -168,6 +176,12 @@ int main(int argc, char *argv[]) {
                 break;
             case 'm':
                 netmask = atoi(optarg);
+                break;
+            case 'S':
+                zmq_sub_port = atoi(optarg);
+                break;
+            case 'P':
+                zmq_pub_port = atoi(optarg);
                 break;
             case 'h':
                 print_usage(argv[0]);
@@ -208,7 +222,8 @@ int main(int argc, char *argv[]) {
     csp_init();
 
     /* Initialize interface */
-    csp_iface_t *iface = iface_init(interface, port, node_addr, netmask, baudrate);
+    csp_iface_t *iface = iface_init(interface, port, node_addr, netmask, baudrate,
+                                     zmq_sub_port, zmq_pub_port);
     if (iface == NULL) {
         return 1;
     }

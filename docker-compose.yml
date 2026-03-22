@@ -52,11 +52,11 @@ services:
     build: .
     volumes:
       - .:/satbuild
+      - ~/.satdeploy:/root/.satdeploy
     # Custom init: connect CSH to zmqproxy on 9600/9601 via Docker DNS
     command: >
       bash -c "
         cp /satbuild/satdeploy-apm/build/libcsh_satdeploy_apm.so /root/.local/lib/csh/ 2>/dev/null
-        mkdir -p /root/.satdeploy && cp /satbuild/demo/csh-config.yaml /root/.satdeploy/config.yaml
         echo 'csp init' > /tmp/zmq-compose.csh
         echo 'csp add zmq -d -S 9600 -P 9601 19 zmqproxy' >> /tmp/zmq-compose.csh
         echo 'apm load' >> /tmp/zmq-compose.csh

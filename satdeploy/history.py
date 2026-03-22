@@ -91,6 +91,10 @@ class History:
                 "ALTER TABLE deployments ADD COLUMN vmem_cleared INTEGER NOT NULL DEFAULT 0"
             )
 
+        # Add git_hash column if missing (for databases created before provenance)
+        if "git_hash" not in columns:
+            conn.execute("ALTER TABLE deployments ADD COLUMN git_hash TEXT")
+
     def record(self, record: DeploymentRecord) -> None:
         """Record a deployment operation.
 

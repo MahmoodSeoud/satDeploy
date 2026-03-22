@@ -115,12 +115,13 @@ class TestSSHTransportDeploy:
     @patch("satdeploy.transport.ssh.Deployer")
     @patch("satdeploy.transport.ssh.ServiceManager")
     def test_deploy_with_service(self, mock_svc_class, mock_deployer_class, mock_ssh_class, tmp_path):
-        """deploy() stops and starts services when service name provided."""
+        """deploy() stops and starts services when services list provided."""
         binary = tmp_path / "test_app"
         binary.write_bytes(b"test binary content")
 
         mock_deployer = mock_deployer_class.return_value
-        mock_deployer.compute_hash.return_value = "abc12345"
+        mock_deployer.compute_remote_hash.return_value = None
+        mock_deployer.list_backups.return_value = []
         mock_deployer.backup.return_value = None
 
         mock_svc = mock_svc_class.return_value
@@ -132,7 +133,7 @@ class TestSSHTransportDeploy:
             app_name="test_app",
             local_path=str(binary),
             remote_path="/usr/bin/test_app",
-            service_name="test_app.service",
+            services=[("test_app", "test_app.service")],
         )
 
         assert result.success is True
@@ -231,12 +232,13 @@ class TestSSHTransportStatus:
         mock_svc = mock_svc_class.return_value
         mock_svc.get_status.return_value = ServiceStatus.RUNNING
 
-        transport = SSHTransport("192.168.1.50", "root", "/backups")
+        transport = SSHTransport(
+            "192.168.1.50", "root", "/backups",
+            apps={"dipp": {"remote": "/usr/bin/dipp", "service": "dipp.service"}},
+        )
         transport.connect()
 
-        status = transport.get_status(
-            apps={"dipp": {"remote": "/usr/bin/dipp", "service": "dipp.service"}}
-        )
+        status = transport.get_status()
 
         assert "dipp" in status
         assert status["dipp"].running is True

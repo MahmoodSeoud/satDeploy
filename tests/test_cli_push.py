@@ -1,7 +1,7 @@
 """Tests for the satdeploy push command."""
 
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, call
 
 import pytest
 import yaml
@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 from satdeploy.cli import main
 from satdeploy.output import SYMBOLS
+from satdeploy.transport.base import DeployResult
 
 
 def make_config(apps: dict, backup_dir: str = "/opt/satdeploy/backups") -> dict:
@@ -22,6 +23,18 @@ def make_config(apps: dict, backup_dir: str = "/opt/satdeploy/backups") -> dict:
         "backup_dir": backup_dir,
         "apps": apps,
     }
+
+
+def make_mock_transport(deploy_result=None):
+    """Create a mock transport that returns the given deploy result."""
+    transport = MagicMock()
+    if deploy_result is None:
+        deploy_result = DeployResult(
+            success=True, binary_hash="abcd1234", backup_path="/backups/test.bak"
+        )
+    transport.deploy.return_value = deploy_result
+    transport.get_status.return_value = {}
+    return transport
 
 
 class TestPushCommand:
@@ -41,7 +54,7 @@ class TestPushCommand:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -57,7 +70,7 @@ class TestPushCommand:
 
         result = runner.invoke(
             main,
-            ["push", "unknown_app", "--config-dir", str(config_dir)],
+            ["push", "unknown_app", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -83,15 +96,15 @@ class TestPushCommand:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
         assert "not found" in result.output.lower() or "exist" in result.output.lower()
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_connects_to_target(self, mock_ssh_class, tmp_path):
-        """Push should connect to the configured target."""
+    @patch("satdeploy.cli.get_transport")
+    def test_push_connects_to_target(self, mock_get_transport, tmp_path):
+        """Push should connect to the configured target via transport."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
@@ -112,21 +125,19 @@ class TestPushCommand:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
-        mock_ssh_class.assert_called_once_with(host="192.168.1.50", user="root")
+        transport.connect.assert_called_once()
+        transport.disconnect.assert_called_once()
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_shows_success_message(self, mock_ssh_class, tmp_path):
+    @patch("satdeploy.cli.get_transport")
+    def test_push_shows_success_message(self, mock_get_transport, tmp_path):
         """Push should show success message on completion."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
@@ -148,22 +159,19 @@ class TestPushCommand:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
         assert "deployed" in result.output.lower() or "success" in result.output.lower()
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_with_local_override(self, mock_ssh_class, tmp_path):
+    @patch("satdeploy.cli.get_transport")
+    def test_push_with_local_override(self, mock_get_transport, tmp_path):
         """Push should allow overriding local path with --local."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
@@ -185,11 +193,8 @@ class TestPushCommand:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
@@ -198,17 +203,17 @@ class TestPushCommand:
                 "controller",
                 "--local",
                 str(binary),
-                "--config-dir",
-                str(config_dir),
+                "--config",
+                str(config_dir / "config.yaml"),
             ],
         )
 
         assert result.exit_code == 0
-        mock_ssh.upload.assert_called_once()
-        assert str(binary) in str(mock_ssh.upload.call_args)
+        transport.deploy.assert_called_once()
+        assert str(binary) in str(transport.deploy.call_args)
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_expands_tilde_in_local_path(self, mock_ssh_class, tmp_path, monkeypatch):
+    @patch("satdeploy.cli.get_transport")
+    def test_push_expands_tilde_in_local_path(self, mock_get_transport, tmp_path, monkeypatch):
         """Push should expand ~ in local path from config."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
@@ -237,29 +242,26 @@ class TestPushCommand:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0, f"Failed with: {result.output}"
-        mock_ssh.upload.assert_called_once()
+        transport.deploy.assert_called_once()
         # The expanded path should be used
-        assert str(fake_home) in str(mock_ssh.upload.call_args)
+        assert str(fake_home) in str(transport.deploy.call_args)
 
 
 class TestPushWithDependencies:
     """Test push with dependency-aware service management."""
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_stops_dependents_first(self, mock_ssh_class, tmp_path):
-        """Push should stop dependent services before the target."""
+    @patch("satdeploy.cli.get_transport")
+    def test_push_passes_services_to_transport(self, mock_get_transport, tmp_path):
+        """Push should pass dependency-resolved services to transport.deploy()."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
@@ -286,80 +288,27 @@ class TestPushWithDependencies:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "csp_server", "--config-dir", str(config_dir)],
+            ["push", "csp_server", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
-        # Should mention stopping controller (the dependent)
-        assert "controller" in result.output.lower()
+        # transport.deploy should be called with services list
+        deploy_call = transport.deploy.call_args
+        services = deploy_call.kwargs.get("services") or deploy_call[1].get("services")
+        assert services is not None
+        # Services should include controller (dependent of csp_server)
+        service_names = [s[1] for s in services]
+        assert "controller.service" in service_names
+        assert "csp_server.service" in service_names
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_starts_in_correct_order(self, mock_ssh_class, tmp_path):
-        """Push should start services in correct dependency order."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary = tmp_path / "csp_server"
-        binary.write_bytes(b"binary content")
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "controller": {
-                        "local": "./build/controller",
-                        "remote": "/opt/disco/bin/controller",
-                        "service": "controller.service",
-                        "depends_on": ["csp_server"],
-                    },
-                    "csp_server": {
-                        "local": str(binary),
-                        "remote": "/usr/bin/csp_server",
-                        "service": "csp_server.service",
-                    },
-                })
-            )
-        )
-
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
-
-        result = runner.invoke(
-            main,
-            ["push", "csp_server", "--config-dir", str(config_dir)],
-        )
-
-        assert result.exit_code == 0
-        # Output should show stopping controller, then csp_server
-        # And starting csp_server, then controller
-        output_lower = result.output.lower()
-        stop_controller = output_lower.find("stopping controller")
-        stop_csp = output_lower.find("stopping csp_server")
-        start_csp = output_lower.find("starting csp_server")
-        start_controller = output_lower.find("starting controller")
-
-        # Stop order: controller first (dependent), then csp_server
-        if stop_controller != -1 and stop_csp != -1:
-            assert stop_controller < stop_csp, "controller should stop before csp_server"
-        # Start order: csp_server first, then controller (dependent)
-        if start_csp != -1 and start_controller != -1:
-            assert start_csp < start_controller, "csp_server should start before controller"
-
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_library_restarts_dependent_services(self, mock_ssh_class, tmp_path):
-        """Push for library should restart services in restart list."""
+    @patch("satdeploy.cli.get_transport")
+    def test_push_library_passes_restart_services(self, mock_get_transport, tmp_path):
+        """Push for library should pass restart list services to transport."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
@@ -391,27 +340,26 @@ class TestPushWithDependencies:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "libparam", "--config-dir", str(config_dir)],
+            ["push", "libparam", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
-        # Should restart both services
-        output_lower = result.output.lower()
-        assert "csp_server" in output_lower
-        assert "controller" in output_lower
+        deploy_call = transport.deploy.call_args
+        services = deploy_call.kwargs.get("services") or deploy_call[1].get("services")
+        assert services is not None
+        service_names = [s[1] for s in services]
+        assert "csp_server.service" in service_names
+        assert "controller.service" in service_names
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_handles_ssh_error_gracefully(self, mock_ssh_class, tmp_path):
-        """Push should show clean error message on SSH failure, not traceback."""
-        from satdeploy.ssh import SSHError
+    @patch("satdeploy.cli.get_transport")
+    def test_push_handles_transport_error_gracefully(self, mock_get_transport, tmp_path):
+        """Push should show clean error message on transport failure."""
+        from satdeploy.transport.base import TransportError
 
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
@@ -433,29 +381,136 @@ class TestPushWithDependencies:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        # Simulate permission denied error
-        mock_ssh.run.side_effect = SSHError("mkdir: cannot create directory '/opt/satdeploy': Permission denied")
+        transport = MagicMock()
+        transport.connect.side_effect = TransportError("Connection refused")
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         # Should fail with clean error, not traceback
         assert result.exit_code != 0
-        assert "permission denied" in result.output.lower()
+        assert "connection refused" in result.output.lower()
         assert "Traceback" not in result.output
+
+    @patch("satdeploy.cli.get_transport")
+    def test_push_handles_deploy_failure(self, mock_get_transport, tmp_path):
+        """Push should handle deploy returning failure."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": None,
+                    }
+                })
+            )
+        )
+
+        transport = make_mock_transport(
+            DeployResult(success=False, error_message="Permission denied")
+        )
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code != 0
+
+    @patch("satdeploy.cli.get_transport")
+    def test_push_shows_skipped_message(self, mock_get_transport, tmp_path):
+        """Push should show skip message when binary already deployed."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        transport = make_mock_transport(
+            DeployResult(success=True, binary_hash="abcd1234", skipped=True)
+        )
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        assert "already deployed" in result.output.lower()
+
+    @patch("satdeploy.cli.get_transport")
+    def test_push_shows_restored_message(self, mock_get_transport, tmp_path):
+        """Push should show restore message when restoring from backup."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        transport = make_mock_transport(
+            DeployResult(
+                success=True, binary_hash="abcd1234",
+                restored=True, backup_path="/backups/test.bak",
+            )
+        )
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        assert "restored from backup" in result.output.lower()
 
 
 class TestPushHistoryLogging:
     """Tests for deployment history logging on push."""
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_logs_successful_deployment(self, mock_ssh_class, tmp_path):
+    @patch("satdeploy.cli.get_transport")
+    def test_push_logs_successful_deployment(self, mock_get_transport, tmp_path):
         """Successful push should be recorded in history database."""
         from satdeploy.history import History
 
@@ -479,15 +534,12 @@ class TestPushHistoryLogging:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -502,8 +554,8 @@ class TestPushHistoryLogging:
         assert records[0].remote_path == "/opt/disco/bin/controller"
         assert records[0].module == "som1"
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_logs_binary_hash(self, mock_ssh_class, tmp_path):
+    @patch("satdeploy.cli.get_transport")
+    def test_push_logs_binary_hash(self, mock_get_transport, tmp_path):
         """Push should record the binary hash in history."""
         from satdeploy.history import History
 
@@ -527,15 +579,12 @@ class TestPushHistoryLogging:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -545,11 +594,11 @@ class TestPushHistoryLogging:
         assert records[0].binary_hash is not None
         assert len(records[0].binary_hash) == 8  # First 8 chars of SHA256
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_logs_failed_deployment(self, mock_ssh_class, tmp_path):
+    @patch("satdeploy.cli.get_transport")
+    def test_push_logs_failed_deployment(self, mock_get_transport, tmp_path):
         """Failed push should be recorded in history with error message."""
         from satdeploy.history import History
-        from satdeploy.ssh import SSHError
+        from satdeploy.transport.base import TransportError
 
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
@@ -571,15 +620,13 @@ class TestPushHistoryLogging:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.side_effect = SSHError("Connection refused")
+        transport = MagicMock()
+        transport.connect.side_effect = TransportError("Connection refused")
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -594,48 +641,8 @@ class TestPushHistoryLogging:
 class TestPushPolishedOutput:
     """Tests for polished CLI output formatting."""
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_shows_step_counters(self, mock_ssh_class, tmp_path):
-        """Push should show step counters like [1/5]."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary = tmp_path / "controller"
-        binary.write_bytes(b"binary content")
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "controller": {
-                        "local": str(binary),
-                        "remote": "/opt/disco/bin/controller",
-                        "service": "controller.service",
-                    }
-                })
-            )
-        )
-
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
-
-        result = runner.invoke(
-            main,
-            ["push", "controller", "--config-dir", str(config_dir)],
-            color=True,
-        )
-
-        assert result.exit_code == 0
-        # Should have step counters in output
-        assert "[1/" in result.output
-        assert "[2/" in result.output
-
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_success_shows_checkmark(self, mock_ssh_class, tmp_path):
+    @patch("satdeploy.cli.get_transport")
+    def test_push_success_shows_checkmark(self, mock_get_transport, tmp_path):
         """Successful push should show checkmark symbol."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
@@ -657,24 +664,177 @@ class TestPushPolishedOutput:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
             color=True,
         )
 
         assert result.exit_code == 0
         assert SYMBOLS["check"] in result.output
 
-    @patch("satdeploy.cli.SSHClient")
-    def test_push_shows_arrow_for_upload(self, mock_ssh_class, tmp_path):
-        """Push should show arrow symbol for file transfer."""
+
+class TestPushDryRun:
+    """Test --dry-run flag."""
+
+    @patch("satdeploy.cli.get_transport")
+    def test_dry_run_shows_plan_without_deploying(self, mock_get_transport, tmp_path):
+        """--dry-run should show what would happen without actually deploying."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content for dry run test")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--dry-run", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        assert "Dry run" in result.output
+        assert "controller" in result.output
+        assert "/opt/disco/bin/controller" in result.output
+        # Transport should never be created in dry-run mode
+        mock_get_transport.assert_not_called()
+
+    @patch("satdeploy.cli.get_transport")
+    def test_dry_run_shows_file_size(self, mock_get_transport, tmp_path):
+        """--dry-run should show the binary file size."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"x" * 2048)  # 2 KB
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--dry-run", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        assert "KB" in result.output
+
+
+class TestPushConfirmation:
+    """Test confirmation prompts."""
+
+    @patch("satdeploy.cli.get_transport")
+    def test_push_all_prompts_for_confirmation(self, mock_get_transport, tmp_path):
+        """push --all should ask for confirmation when deploying multiple apps."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary1 = tmp_path / "app1"
+        binary1.write_bytes(b"app1 binary")
+        binary2 = tmp_path / "app2"
+        binary2.write_bytes(b"app2 binary")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "app1": {
+                        "local": str(binary1),
+                        "remote": "/opt/bin/app1",
+                        "service": "app1.service",
+                    },
+                    "app2": {
+                        "local": str(binary2),
+                        "remote": "/opt/bin/app2",
+                        "service": "app2.service",
+                    },
+                })
+            )
+        )
+
+        # Answer "no" to confirmation
+        result = runner.invoke(
+            main,
+            ["push", "--all", "--config", str(config_dir / "config.yaml")],
+            input="n\n",
+        )
+
+        assert result.exit_code == 0
+        assert "Aborted" in result.output
+        mock_get_transport.assert_not_called()
+
+    @patch("satdeploy.cli.get_transport")
+    def test_push_all_with_yes_skips_confirmation(self, mock_get_transport, tmp_path):
+        """push --all -y should skip confirmation."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary1 = tmp_path / "app1"
+        binary1.write_bytes(b"app1 binary")
+        binary2 = tmp_path / "app2"
+        binary2.write_bytes(b"app2 binary")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "app1": {
+                        "local": str(binary1),
+                        "remote": "/opt/bin/app1",
+                        "service": "app1.service",
+                    },
+                    "app2": {
+                        "local": str(binary2),
+                        "remote": "/opt/bin/app2",
+                        "service": "app2.service",
+                    },
+                })
+            )
+        )
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            ["push", "--all", "-y", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        assert "Aborted" not in result.output
+
+    @patch("satdeploy.cli.get_transport")
+    def test_push_single_app_no_confirmation(self, mock_get_transport, tmp_path):
+        """push with a single app should not ask for confirmation."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
@@ -695,17 +855,294 @@ class TestPushPolishedOutput:
             )
         )
 
-        mock_ssh = MagicMock()
-        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
-        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
-        mock_ssh.file_exists.return_value = False
-        mock_ssh.run.return_value = Mock(stdout="active\n", stderr="", exit_code=0)
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
 
         result = runner.invoke(
             main,
-            ["push", "controller", "--config-dir", str(config_dir)],
-            color=True,
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
-        assert SYMBOLS["arrow"] in result.output
+        assert "Continue?" not in result.output
+
+
+class TestPushHealthCheck:
+    """Test post-deploy health checks."""
+
+    @patch("satdeploy.cli.get_transport")
+    def test_push_ssh_runs_health_check(self, mock_get_transport, tmp_path):
+        """SSH push should check service status after successful deploy."""
+        from satdeploy.services import ServiceStatus
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        transport = make_mock_transport()
+        # Set up service_manager so the health check path is exercised
+        mock_svc_mgr = MagicMock()
+        mock_svc_mgr.get_status.return_value = ServiceStatus.RUNNING
+        transport.service_manager = mock_svc_mgr
+        transport.ssh = MagicMock()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        assert "health check passed" in result.output.lower()
+        mock_svc_mgr.get_status.assert_called_once_with("controller.service")
+
+    @patch("satdeploy.cli.get_transport")
+    def test_push_ssh_health_check_warns_on_failure(self, mock_get_transport, tmp_path):
+        """SSH push should warn if service is in failed state after deploy."""
+        from satdeploy.services import ServiceStatus
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        transport = make_mock_transport()
+        mock_svc_mgr = MagicMock()
+        mock_svc_mgr.get_status.return_value = ServiceStatus.FAILED
+        transport.service_manager = mock_svc_mgr
+        transport.ssh = MagicMock()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        assert "failed state" in result.output.lower()
+
+
+class TestPushProvenance:
+    """Test git provenance tracking on push."""
+
+    @patch("satdeploy.cli.capture_provenance", return_value="main@abc12345")
+    @patch("satdeploy.cli.get_transport")
+    def test_push_captures_provenance(self, mock_get_transport, mock_provenance, tmp_path):
+        """Push should show provenance string and record git_hash in history."""
+        from satdeploy.history import History
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        assert "main@abc12345" in result.output
+
+        history = History(config_dir / "history.db")
+        records = history.get_history("controller")
+        assert len(records) == 1
+        assert records[0].git_hash == "main@abc12345"
+
+    @patch("satdeploy.cli.capture_provenance", return_value="main@abc12345-dirty")
+    @patch("satdeploy.cli.get_transport")
+    def test_push_require_clean_rejects_dirty(self, mock_get_transport, mock_provenance, tmp_path):
+        """Push with --require-clean should reject dirty git tree."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--require-clean", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code != 0
+        assert "dirty" in result.output.lower()
+        mock_get_transport.assert_not_called()
+
+    @patch("satdeploy.cli.capture_provenance", return_value="main@abc12345")
+    @patch("satdeploy.cli.get_transport")
+    def test_push_require_clean_allows_clean(self, mock_get_transport, mock_provenance, tmp_path):
+        """Push with --require-clean should succeed when tree is clean."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--require-clean", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        assert "deployed" in result.output.lower() or "success" in result.output.lower()
+
+    @patch("satdeploy.cli.capture_provenance", return_value="main@abc12345-dirty")
+    @patch("satdeploy.cli.get_transport")
+    def test_push_warns_on_dirty_tree(self, mock_get_transport, mock_provenance, tmp_path):
+        """Push without --require-clean should warn on dirty tree but succeed."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        assert "uncommitted" in result.output.lower() or "dirty" in result.output.lower()
+        # Deploy should still succeed
+        assert "deployed" in result.output.lower() or "success" in result.output.lower()
+
+    @patch("satdeploy.cli.capture_provenance", return_value=None)
+    @patch("satdeploy.cli.get_transport")
+    def test_push_no_provenance_when_not_git_repo(self, mock_get_transport, mock_provenance, tmp_path):
+        """Push should succeed without provenance when not in a git repo."""
+        from satdeploy.history import History
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config", str(config_dir / "config.yaml")],
+        )
+
+        assert result.exit_code == 0
+        # No provenance string should appear in parentheses after the hash
+        # The output should have the hash but not a provenance tag
+        assert "main@" not in result.output
+
+        history = History(config_dir / "history.db")
+        records = history.get_history("controller")
+        assert len(records) == 1
+        assert records[0].git_hash is None

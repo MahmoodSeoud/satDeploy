@@ -19,7 +19,8 @@ from satdeploy.transport.csp import CSPTransport
 from satdeploy.transport.base import TransportError
 
 
-DEMO_DIR = Path.home() / ".satdeploy-demo"
+DEMO_CONFIG_PATH = Path.home() / ".satdeploy" / ".demo-config.yaml"
+DEMO_DIR = Path.home() / ".satdeploy" / "demo"
 GHCR_IMAGE = "ghcr.io/mahmoodseoud/satdeploy-sim:latest"
 
 # Demo satellite configuration — matches agent defaults
@@ -100,8 +101,8 @@ TUTORIAL_TEXT = """\
   {line} Scripted deploys (Python CLI) {line4}
 
     For CI/automation, satdeploy also has a Python CLI:
-    $ satdeploy push test_app --config-dir ~/.satdeploy-demo
-    $ satdeploy status --config-dir ~/.satdeploy-demo
+    $ satdeploy deploy test_app --config ~/.satdeploy/.demo-config.yaml
+    $ satdeploy status --config ~/.satdeploy/.demo-config.yaml
 
   {line} When you're done {line5}
 
@@ -208,10 +209,9 @@ def _ensure_agent_dirs(compose_file: Path) -> None:
 
 
 def _write_demo_config() -> None:
-    """Write the demo config.yaml."""
-    DEMO_DIR.mkdir(parents=True, exist_ok=True)
-    config_path = DEMO_DIR / "config.yaml"
-    with open(config_path, "w") as f:
+    """Write the demo config YAML."""
+    DEMO_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(DEMO_CONFIG_PATH, "w") as f:
         yaml.dump(DEMO_CONFIG, f, default_flow_style=False)
 
 
@@ -365,8 +365,7 @@ def demo_start() -> None:
     # Check if demo is already fully set up and running
     compose_file = _get_compose_file()
     if compose_file.exists() and _is_agent_container_running(compose_file):
-        config_path = DEMO_DIR / "config.yaml"
-        if config_path.exists():
+        if DEMO_CONFIG_PATH.exists():
             click.echo(success("Demo already running"))
             _print_tutorial()
             return
@@ -403,7 +402,7 @@ def demo_start() -> None:
             "Demo agent failed to start. Check Docker logs above."
         )
 
-    click.echo(success(f"Demo config written to {DEMO_DIR}/"))
+    click.echo(success(f"Demo config written to {DEMO_CONFIG_PATH}"))
     _print_tutorial()
 
 
@@ -429,15 +428,20 @@ def demo_stop(clean: bool = False) -> None:
     else:
         click.echo("Demo environment is not running.")
 
-    if clean and DEMO_DIR.exists():
-        shutil.rmtree(DEMO_DIR)
-        click.echo(success(f"Removed {DEMO_DIR}"))
-    elif DEMO_DIR.exists():
+    if clean:
+        if DEMO_DIR.exists():
+            shutil.rmtree(DEMO_DIR)
+        if DEMO_CONFIG_PATH.exists():
+            DEMO_CONFIG_PATH.unlink()
+        # Clean up demo history too
+        history_path = DEMO_CONFIG_PATH.parent / ".demo-history.db"
+        if history_path.exists():
+            history_path.unlink()
+        click.echo(success("Removed demo files"))
+    elif DEMO_CONFIG_PATH.exists():
         # Always clean up demo config so next `demo start` re-initializes
-        config_path = DEMO_DIR / "config.yaml"
-        if config_path.exists():
-            config_path.unlink()
-            click.echo(success("Demo config removed"))
+        DEMO_CONFIG_PATH.unlink()
+        click.echo(success("Demo config removed"))
 
 
 def demo_status() -> None:
@@ -452,7 +456,7 @@ def demo_status() -> None:
     click.echo(success("Demo environment is running"))
     click.echo(f"  Agent:     CSP node {DEMO_AGENT_NODE}")
     click.echo(f"  ZMQ proxy: localhost:{DEMO_ZMQ_PUB_PORT}/{DEMO_ZMQ_SUB_PORT}")
-    click.echo(f"  Config:    {DEMO_DIR}/config.yaml")
+    click.echo(f"  Config:    {DEMO_CONFIG_PATH}")
 
     repo_compose = _find_repo_compose()
     if repo_compose:

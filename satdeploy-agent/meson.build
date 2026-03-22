@@ -40,10 +40,11 @@ csp_dep = dependency('csp', fallback: ['csp', 'csp_dep'])
 param_dep = dependency('param', fallback: ['param', 'param_dep'])
 dtp_client_dep = dependency('dtp_client', fallback: ['dtp', 'dtp_client_dep'])
 proto_c_dep = dependency('libprotobuf-c')
+openssl_dep = dependency('openssl')
 m_dep = meson.get_compiler('c').find_library('m', required: false)
 pthread_dep = meson.get_compiler('c').find_library('pthread', required: true)
 
-deps = [csp_dep, param_dep, dtp_client_dep, proto_c_dep, m_dep, pthread_dep]
+deps = [csp_dep, param_dep, dtp_client_dep, proto_c_dep, openssl_dep, m_dep, pthread_dep]
 
 satdeploy_agent = executable(
 	'satdeploy-agent',

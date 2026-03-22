@@ -1,8 +1,9 @@
 """Deployment logic for satdeploy."""
 
-import hashlib
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
+
+from satdeploy.hash import compute_file_hash
 
 if TYPE_CHECKING:
     from satdeploy.ssh import SSHClient
@@ -54,11 +55,7 @@ class Deployer:
         Returns:
             First 8 characters of the hex digest.
         """
-        sha256 = hashlib.sha256()
-        with open(local_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                sha256.update(chunk)
-        return sha256.hexdigest()[:8]
+        return compute_file_hash(local_path)
 
     def compute_remote_hash(self, remote_path: str) -> Optional[str]:
         """Compute SHA256 hash of a remote file.

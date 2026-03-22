@@ -28,7 +28,7 @@ class TestConfigLoad:
 
     def test_load_nonexistent_config_returns_none(self, tmp_path):
         """Loading a non-existent config should return None."""
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         assert config.load() is None
 
     def test_load_valid_config(self, tmp_path):
@@ -51,7 +51,7 @@ class TestConfigLoad:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         loaded = config.load()
 
         assert loaded is not None
@@ -64,7 +64,7 @@ class TestConfigLoad:
         config_file = tmp_path / "config.yaml"
         config_file.write_text("invalid: yaml: content: [")
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         with pytest.raises(yaml.YAMLError):
             config.load()
 
@@ -75,7 +75,7 @@ class TestConfigSave:
     def test_save_creates_config_dir(self, tmp_path):
         """Saving should create the config directory if it doesn't exist."""
         config_dir = tmp_path / "new_dir"
-        config = Config(config_dir=config_dir)
+        config = Config(config_path=config_dir / "config.yaml")
 
         config.save({"host": "192.168.1.50"})
 
@@ -84,7 +84,7 @@ class TestConfigSave:
 
     def test_save_writes_valid_yaml(self, tmp_path):
         """Saved config should be valid YAML."""
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         data = {
             "name": "som1",
             "transport": "ssh",
@@ -209,7 +209,7 @@ class TestConfigGetApp:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         app = config.get_app("controller")
 
@@ -228,7 +228,7 @@ class TestConfigGetApp:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         assert config.get_app("nonexistent") is None
 
@@ -307,7 +307,7 @@ class TestModuleName:
         config_data = {"name": "som1", "transport": "ssh", "host": "1.2.3.4", "user": "root", "apps": {}}
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         assert config.module_name == "som1"
 
@@ -317,7 +317,7 @@ class TestModuleName:
         config_data = {"transport": "ssh", "host": "1.2.3.4", "user": "root", "apps": {}}
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         assert config.module_name == "default"
 
@@ -338,7 +338,7 @@ class TestGetTarget:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         target = config.get_target()
 
@@ -367,7 +367,7 @@ class TestGetTarget:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         target = config.get_target()
 
@@ -389,7 +389,7 @@ class TestGetTarget:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         target = config.get_target()
 
@@ -408,7 +408,7 @@ class TestGetTarget:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         target = config.get_target()
 
@@ -433,7 +433,7 @@ class TestGetTarget:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         target = config.get_target()
 
@@ -454,7 +454,7 @@ class TestGetTarget:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         target = config.get_target()
 
@@ -477,7 +477,7 @@ class TestGetModules:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         modules = config.get_modules()
 
@@ -497,7 +497,7 @@ class TestGetModules:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         module = config.get_module("anything")
 
@@ -528,7 +528,7 @@ class TestGetAppConfig:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         app = config.get_app("a53-app-sys-manager")
 
@@ -557,7 +557,7 @@ class TestGetAppConfig:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         app = config.get_app("upload_client")
 
@@ -578,7 +578,7 @@ class TestGetAppConfig:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         assert config.get_app("nonexistent") is None
 
@@ -602,7 +602,7 @@ class TestGetAllAppNames:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         names = config.get_all_app_names()
 
@@ -623,7 +623,7 @@ class TestGetAllAppNames:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         names = config.get_all_app_names()
 
@@ -651,7 +651,7 @@ class TestCSPAppConfig:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         app = config.get_app("dipp")
 
@@ -679,7 +679,7 @@ class TestGetAppsys:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         appsys = config.get_appsys()
 
@@ -700,7 +700,7 @@ class TestGetAppsys:
         }
         config_file.write_text(yaml.dump(config_data))
 
-        config = Config(config_dir=tmp_path)
+        config = Config(config_path=tmp_path / "config.yaml")
         config.load()
         appsys = config.get_appsys()
 

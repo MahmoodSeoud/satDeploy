@@ -104,7 +104,7 @@ apps:
     remote: /opt/disco/bin/dipp
     param: mng_dipp
 """)
-        return config_dir
+        return config_yaml
 
     def test_push_csp_calls_transport_deploy(self, csp_config, local_binary):
         """Push with CSP module uses CSPTransport.deploy()."""
@@ -118,7 +118,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["push", "dipp", "--config-dir", str(csp_config)],
+                ["push", "dipp", "--config", str(csp_config)],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -143,7 +143,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["push", "dipp", "--config-dir", str(csp_config)],
+                ["push", "dipp", "--config", str(csp_config)],
             )
 
         assert result.exit_code == 0
@@ -161,11 +161,64 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["push", "dipp", "--config-dir", str(csp_config)],
+                ["push", "dipp", "--config", str(csp_config)],
             )
 
         assert result.exit_code == 1
         assert "DTP download failed" in result.output
+
+    def test_push_csp_runs_health_check_after_deploy(self, csp_config, local_binary):
+        """Push with CSP should query status after successful deploy."""
+        from satdeploy.transport.base import AppStatus
+
+        runner = CliRunner()
+        mock_transport = MagicMock()
+        mock_transport.deploy.return_value = DeployResult(
+            success=True,
+            backup_path="/opt/satdeploy/backups/dipp/backup.bak",
+        )
+        mock_transport.get_status.return_value = {
+            "dipp": AppStatus(
+                app_name="dipp", running=True,
+                binary_hash="abcd1234", remote_path="/opt/disco/bin/dipp",
+            )
+        }
+
+        with patch("satdeploy.cli.get_transport", return_value=mock_transport):
+            result = runner.invoke(
+                main,
+                ["push", "dipp", "--config", str(csp_config)],
+            )
+
+        assert result.exit_code == 0
+        mock_transport.get_status.assert_called_once()
+        assert "health check passed" in result.output.lower()
+
+    def test_push_csp_health_check_warns_when_not_running(self, csp_config, local_binary):
+        """Health check should warn if app is not running after deploy."""
+        from satdeploy.transport.base import AppStatus
+
+        runner = CliRunner()
+        mock_transport = MagicMock()
+        mock_transport.deploy.return_value = DeployResult(
+            success=True,
+            backup_path="/opt/satdeploy/backups/dipp/backup.bak",
+        )
+        mock_transport.get_status.return_value = {
+            "dipp": AppStatus(
+                app_name="dipp", running=False,
+                binary_hash="abcd1234", remote_path="/opt/disco/bin/dipp",
+            )
+        }
+
+        with patch("satdeploy.cli.get_transport", return_value=mock_transport):
+            result = runner.invoke(
+                main,
+                ["push", "dipp", "--config", str(csp_config)],
+            )
+
+        assert result.exit_code == 0
+        assert "not running" in result.output.lower()
 
 
 class TestRollbackWithCSPTransport:
@@ -206,7 +259,7 @@ apps:
     remote: /opt/disco/bin/dipp
     param: mng_dipp
 """)
-        return config_dir
+        return config_yaml
 
     def test_rollback_csp_calls_transport_rollback(self, csp_config, local_binary):
         """Rollback with CSP module uses CSPTransport.rollback()."""
@@ -217,7 +270,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["rollback", "dipp", "--config-dir", str(csp_config)],
+                ["rollback", "dipp", "--config", str(csp_config)],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -238,7 +291,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["rollback", "dipp", "abc12345", "--config-dir", str(csp_config)],
+                ["rollback", "dipp", "abc12345", "--config", str(csp_config)],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -258,7 +311,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["rollback", "dipp", "--config-dir", str(csp_config)],
+                ["rollback", "dipp", "--config", str(csp_config)],
             )
 
         assert result.exit_code == 1
@@ -303,7 +356,7 @@ apps:
     remote: /opt/disco/bin/dipp
     param: mng_dipp
 """)
-        return config_dir
+        return config_yaml
 
     def test_status_csp_calls_transport_get_status(self, csp_config, local_binary):
         """Status with CSP module uses CSPTransport.get_status()."""
@@ -323,7 +376,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["status", "--config-dir", str(csp_config)],
+                ["status", "--config", str(csp_config)],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -372,7 +425,7 @@ apps:
     remote: /opt/disco/bin/dipp
     param: mng_dipp
 """)
-        return config_dir
+        return config_yaml
 
     def test_list_csp_calls_transport_list_backups(self, csp_config, local_binary):
         """List with CSP module uses CSPTransport.list_backups()."""
@@ -398,7 +451,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["list", "dipp", "--config-dir", str(csp_config)],
+                ["list", "dipp", "--config", str(csp_config)],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"

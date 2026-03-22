@@ -2,16 +2,43 @@
 
 Deploy binaries to embedded Linux targets with versioned backups, dependency-aware service restarts, and one-command rollback.
 
+## Try it in 60 seconds
+
+No hardware needed. satdeploy ships with a simulated satellite target via Docker:
+
+```bash
+git clone https://github.com/MahmoodSeoud/satBuild.git
+cd satBuild
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+
+satdeploy demo start
+```
+
+This pulls a container with a simulated satellite, configures everything, and prints a guided tutorial. Then:
+
+```bash
+satdeploy status --config ~/.satdeploy/.demo-config.yaml        # See what's deployed
+satdeploy push test_app --config ~/.satdeploy/.demo-config.yaml  # Deploy a binary
+satdeploy list test_app --config ~/.satdeploy/.demo-config.yaml  # See version history
+satdeploy rollback test_app --config ~/.satdeploy/.demo-config.yaml  # Roll back
+satdeploy demo watch                                    # Stream agent logs
+satdeploy demo stop                                     # Clean up
+```
+
+Docker is only used for the demo simulator. Real deployments use SSH or CSP directly.
+
 ## Why
 
 Deploying binaries to embedded targets during development is tedious. You're either using a janky uploader, a USB stick, or SSH + prayer. No versioning, no rollback, no dependency awareness.
 
 satdeploy fixes this with:
-- **Versioned backups** - Every deploy saves the previous binary
+- **Versioned backups** - Every deploy saves the previous binary with its content hash
+- **Git provenance** - Every deploy records the git commit that built the binary
 - **Dependency ordering** - Services stop/start in the right order
 - **One-command rollback** - Instantly restore any previous version
 - **Multi-transport** - Works over SSH or CSP (satellite links)
-- **Per-target configs** - Separate config dirs per target, switch with `--config-dir`
+- **Per-target configs** - Separate config dirs per target, switch with `--config`
 
 ## Components
 
@@ -30,25 +57,6 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-## Quick Start
-
-```bash
-# Setup (interactive)
-satdeploy init
-
-# Deploy
-satdeploy push controller
-
-# Check status
-satdeploy status
-
-# Rollback
-satdeploy rollback controller
-
-# View backups
-satdeploy list controller
-```
-
 ## Commands
 
 | Command | Description |
@@ -56,14 +64,54 @@ satdeploy list controller
 | `satdeploy init` | Interactive setup |
 | `satdeploy push <app>` | Deploy binary |
 | `satdeploy push --all` | Deploy all apps |
-| `satdeploy status` | Show app statuses |
+| `satdeploy push --require-clean` | Refuse to deploy from dirty git tree |
+| `satdeploy status` | Show app statuses with git provenance |
 | `satdeploy list <app>` | List all versions |
 | `satdeploy rollback <app>` | Restore previous version |
 | `satdeploy rollback <app> <hash>` | Restore specific version |
 | `satdeploy logs <app>` | Show service logs |
 | `satdeploy config` | Show configuration |
+| `satdeploy demo start` | Start simulated satellite (Docker) |
+| `satdeploy demo stop` | Stop simulator |
+| `satdeploy demo watch` | Stream agent logs |
+| `satdeploy demo eject` | Generate config for real hardware |
 
-All commands accept `--config-dir` to select which target config to use (e.g. `--config-dir ~/.satdeploy/som2`).
+All commands accept `--config` to select which target config to use (e.g. `--config ~/.satdeploy/som2/config.yaml`).
+
+## Example Session
+
+```
+$ satdeploy push controller
+[1/4] Stopping controller.service
+[2/4] Backing up /opt/disco/bin/controller
+[3/4] Uploading ./build/controller
+[4/4] Starting controller.service
+> Deployed controller (e5f6a7b9) main@3c940acf
+
+$ satdeploy status
+Target: som1 (192.168.1.50)
+
+    APP              STATUS        HASH       SOURCE           TIMESTAMP
+    --------------------------------------------------------------------------
+  > controller      running       e5f6a7b9  main@3c940acf    2024-01-15 14:35
+  > csp_server      running       b7e1d2a4  main@ddfa081f    2024-01-15 09:15
+  - libparam        deployed      c4d5e6f1  main@9c622a2b    2024-01-12 16:23
+
+$ satdeploy list controller
+Versions for controller:
+
+    HASH       SOURCE           TIMESTAMP            STATUS
+    ---------------------------------------------------------------
+  > e5f6a7b9  main@3c940acf    2024-01-15 14:35:10  deployed
+  - a3f2c9b8  main@ddfa081f    2024-01-15 14:30:22  backup
+  - d2c3b4a5  feat@17ad579b    2024-01-14 09:15:00  backup
+
+$ satdeploy rollback controller
+[1/3] Stopping controller.service
+[2/3] Restoring a3f2c9b8
+[3/3] Starting controller.service
+> Rolled back controller to a3f2c9b8
+```
 
 ## Configuration
 
@@ -145,46 +193,27 @@ When deploying an app with dependencies:
 
 Example: `controller` depends on `csp_server`:
 ```
-Stop:  controller → csp_server
-Start: csp_server → controller
+Stop:  controller -> csp_server
+Start: csp_server -> controller
 ```
 
 For libraries with a `restart` list, those services are restarted directly.
 
-## Example Session
+## From Demo to Real Hardware
 
+After trying the demo, transition to your actual target:
+
+```bash
+# Generate a config template for your hardware
+satdeploy demo eject
+
+# Or set up manually
+satdeploy init --config ~/.satdeploy/my-target
 ```
-$ satdeploy status
-Module: default (192.168.1.50)
 
-    APP              STATUS        HASH       TIMESTAMP
-    ------------------------------------------------------------
-  > controller      running       a3f2c9b8  2024-01-15 14:30:22
-  > csp_server      running       b7e1d2a4  2024-01-15 09:15:44
-  - libparam        deployed      c4d5e6f1  2024-01-12 16:23:01
-
-$ satdeploy push controller
-[1/4] Stopping controller.service
-[2/4] Backing up /opt/disco/bin/controller
-[3/4] Uploading ./build/controller
-[4/4] Starting controller.service
-> Deployed controller (e5f6a7b9)
-
-$ satdeploy list controller
-Versions for controller:
-
-    HASH       TIMESTAMP            STATUS
-    ---------------------------------------------
-  > e5f6a7b9  2024-01-15 14:35:10  deployed
-  - a3f2c9b8  2024-01-15 14:30:22  backup
-  - d2c3b4a5  2024-01-14 09:15:00  backup
-
-$ satdeploy rollback controller
-[1/3] Stopping controller.service
-[2/3] Restoring a3f2c9b8
-[3/3] Starting controller.service
-> Rolled back controller to a3f2c9b8
-```
+For SSH targets, you just need network access and an SSH key. For CSP targets, you need:
+1. `satdeploy-agent` running on the target (see below)
+2. A CSP link (zmqproxy, CAN, or KISS serial)
 
 ## Building the Agent
 
@@ -215,6 +244,7 @@ Then in csh: `satdeploy help`
 ## Requirements
 
 - Python 3.8+
+- Docker (for demo mode only)
 - SSH access to target (for SSH transport)
 - `satdeploy-agent` on target (for CSP transport)
 - systemd on target

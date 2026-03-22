@@ -49,7 +49,7 @@ class TestListCommand:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -65,7 +65,7 @@ class TestListCommand:
 
         result = runner.invoke(
             main,
-            ["list", "unknown_app", "--config-dir", str(config_dir)],
+            ["list", "unknown_app", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code != 0
@@ -100,7 +100,7 @@ class TestListCommand:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -137,7 +137,7 @@ class TestListCommand:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -170,7 +170,7 @@ class TestListCommand:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
@@ -209,7 +209,7 @@ class TestListPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config", str(config_dir / "config.yaml")],
             color=True,
         )
 
@@ -245,7 +245,7 @@ class TestListPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config", str(config_dir / "config.yaml")],
             color=True,
         )
 
@@ -299,7 +299,7 @@ class TestListPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config", str(config_dir / "config.yaml")],
             color=True,
         )
 
@@ -351,7 +351,7 @@ class TestListPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config", str(config_dir / "config.yaml")],
         )
 
         assert result.exit_code == 0
