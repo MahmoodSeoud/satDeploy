@@ -18,4 +18,4 @@
 	url = https://github.com/spaceinventor/libparam
 [submodule "satdeploy-agent/lib/dtp"]
 	path = satdeploy-agent/lib/dtp
-	url = https://github.com/spaceinventor/libdtp
+	url = https://github.com/MahmoodSeoud/libdtp
