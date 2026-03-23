@@ -1,10 +1,12 @@
 """CLI entry point for satdeploy."""
 
 import os
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
 import click
+from click.shell_completion import CompletionItem
 
 from satdeploy.config import DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_FILE, Config, ModuleConfig, AppConfig
 from satdeploy.dependencies import DependencyResolver
@@ -281,6 +283,126 @@ def config_option(f):
     )(f)
 
 
+class AppNameType(click.ParamType):
+    """Click parameter type with shell completion for app names from config."""
+
+    name = "app"
+
+    def shell_complete(self, ctx, param, incomplete):
+        """Return completions for app names."""
+        config_path = ctx.params.get("config_path")
+        config = Config(config_path=config_path)
+        if config.load() is None:
+            return []
+        names = config.get_all_app_names()
+        return [
+            CompletionItem(name)
+            for name in names
+            if name.startswith(incomplete)
+        ]
+
+
+APP_NAME = AppNameType()
+
+def _detect_shell() -> str:
+    """Detect the current shell."""
+    shell = os.environ.get("SHELL", "")
+    if "zsh" in shell:
+        return "zsh"
+    elif "fish" in shell:
+        return "fish"
+    return "bash"
+
+
+def _get_completion_path(shell: str) -> Path | None:
+    """Get the system completion file path where shells auto-load from.
+
+    zsh: site-functions dir on fpath (like gh, docker, brew)
+    bash: /etc/bash_completion.d/ or ~/.local/share/bash-completion/completions/
+    fish: ~/.config/fish/completions/
+    """
+    if shell == "zsh":
+        # Check standard locations in priority order
+        candidates = [
+            Path("/usr/local/share/zsh/site-functions"),
+            Path("/usr/share/zsh/site-functions"),
+        ]
+        # Also check Homebrew prefix
+        brew_prefix = os.environ.get("HOMEBREW_PREFIX", "/opt/homebrew")
+        candidates.insert(0, Path(brew_prefix) / "share" / "zsh" / "site-functions")
+
+        for d in candidates:
+            if d.is_dir() and os.access(d, os.W_OK):
+                return d / "_satdeploy"
+        # Fallback: user-local dir
+        local_dir = Path.home() / ".local" / "share" / "zsh" / "site-functions"
+        return local_dir / "_satdeploy"
+
+    elif shell == "fish":
+        return Path.home() / ".config" / "fish" / "completions" / "satdeploy.fish"
+
+    else:  # bash
+        user_dir = Path.home() / ".local" / "share" / "bash-completion" / "completions"
+        return user_dir / "satdeploy"
+
+
+def _generate_completion_script(shell: str) -> str:
+    """Generate the full completion script by invoking Click's machinery."""
+    env_var = "_SATDEPLOY_COMPLETE"
+    if shell == "zsh":
+        source_var = "zsh_source"
+    elif shell == "fish":
+        source_var = "fish_source"
+    else:
+        source_var = "bash_source"
+
+    result = subprocess.run(
+        ["satdeploy"],
+        env={**os.environ, env_var: source_var},
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
+
+
+def _install_completion(quiet: bool = False) -> bool:
+    """Install shell completion to the system completions directory.
+
+    Writes a completion file where the shell auto-loads it (like gh, docker).
+    No rc file edits needed — works on next shell start.
+    """
+    shell = _detect_shell()
+    comp_path = _get_completion_path(shell)
+    if comp_path is None:
+        if not quiet:
+            click.echo(warning("Could not find a completion directory for your shell"))
+        return False
+
+    # Already installed?
+    if comp_path.exists():
+        if not quiet:
+            click.echo(f"  Shell completion already installed at {comp_path}")
+        return True
+
+    script = _generate_completion_script(shell)
+    if not script.strip():
+        if not quiet:
+            click.echo(warning("Failed to generate completion script"))
+        return False
+
+    try:
+        comp_path.parent.mkdir(parents=True, exist_ok=True)
+        comp_path.write_text(script)
+        if not quiet:
+            click.echo(success(f"Shell completion installed to {comp_path}"))
+            click.echo("  Works automatically in new shell sessions.")
+        return True
+    except OSError as e:
+        if not quiet:
+            click.echo(warning(f"Could not write to {comp_path}: {e}"))
+        return False
+
+
 @click.group(cls=ColoredGroup)
 def main():
     """Deploy binaries to embedded Linux targets."""
@@ -342,9 +464,38 @@ def init(config_path: Path | None):
     click.echo("")
     click.echo(success(f"Config saved to {config.config_path}"))
 
+    # Auto-install shell completion
+    click.echo("")
+    _install_completion()
+
+
+@main.command(hidden=True)
+@click.option("--install", is_flag=True, help="Install completion to system directory")
+@click.option("--uninstall", is_flag=True, help="Remove installed completion")
+def completion(install: bool, uninstall: bool):
+    """Shell completion for satdeploy.
+
+    Without flags, prints the completion script to stdout.
+    With --install, writes it to the system completions directory
+    (same place as gh, docker, brew — no rc file edits needed).
+    """
+    shell = _detect_shell()
+    if uninstall:
+        comp_path = _get_completion_path(shell)
+        if comp_path and comp_path.exists():
+            comp_path.unlink()
+            click.echo(success(f"Removed {comp_path}"))
+        else:
+            click.echo("No completion file found.")
+    elif install:
+        _install_completion()
+    else:
+        script = _generate_completion_script(shell)
+        click.echo(script)
+
 
 @main.command()
-@click.argument("apps", nargs=-1)
+@click.argument("apps", nargs=-1, type=APP_NAME)
 @click.option("--all", "all_apps", is_flag=True, help="Deploy all apps")
 @click.option("--clean-vmem", is_flag=True, help="Clear vmem for deployed apps")
 @click.option(
@@ -816,7 +967,7 @@ def status(config_path: Path | None):
 
 
 @main.command("list")
-@click.argument("app")
+@click.argument("app", type=APP_NAME)
 @config_option
 def list_backups(app: str, config_path: Path | None):
     """List all versions of an app (deployed + backups).
@@ -997,7 +1148,7 @@ def list_backups(app: str, config_path: Path | None):
 
 
 @main.command()
-@click.argument("app")
+@click.argument("app", type=APP_NAME)
 @click.argument("hash", required=False, default=None)
 @config_option
 def rollback(app: str, hash: str | None, config_path: Path | None):  # noqa: A002
@@ -1250,7 +1401,7 @@ def config(config_path: Path | None):
 
 
 @main.command()
-@click.argument("app")
+@click.argument("app", type=APP_NAME)
 @click.option(
     "--lines",
     "-n",
