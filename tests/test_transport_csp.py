@@ -379,14 +379,14 @@ class TestCSPTransportListBackups:
         assert backups[0].binary_hash == "abc12345"
 
 
-class TestCSPTransportVerify:
-    """Test CSP verification."""
+class TestCSPTransportLogs:
+    """Test CSP log fetching."""
 
-    def test_verify_queries_agent(self, mock_zmq):
-        """verify() sends CMD_VERIFY and returns checksum."""
+    def test_get_logs(self, mock_zmq):
+        """get_logs() sends CMD_LOGS and returns log output."""
         response = DeployResponse()
         response.success = True
-        response.actual_checksum = "abc12345"
+        response.log_output = "Mar 22 service started"
         mock_zmq._sub.recv.return_value = make_csp_response(response)
 
         transport = CSPTransport(
@@ -397,6 +397,6 @@ class TestCSPTransportVerify:
         )
         transport.connect()
 
-        checksum = transport.verify("dipp", "/usr/bin/dipp")
+        log_output = transport.get_logs("dipp", "dipp.service", lines=50)
 
-        assert checksum == "abc12345"
+        assert log_output == "Mar 22 service started"

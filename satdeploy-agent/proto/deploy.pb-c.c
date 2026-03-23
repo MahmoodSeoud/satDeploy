@@ -187,7 +187,7 @@ void   satdeploy__deploy_response__free_unpacked
   assert(message->base.descriptor == &satdeploy__deploy_response__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descriptors[15] =
+static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descriptors[16] =
 {
   {
     "command",
@@ -369,6 +369,18 @@ static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descripto
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "log_lines",
+    16,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Satdeploy__DeployRequest, log_lines),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
   1,   /* field[1] = app_name */
@@ -380,6 +392,7 @@ static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
   7,   /* field[7] = dtp_server_port */
   10,   /* field[10] = expected_checksum */
   9,   /* field[9] = expected_size */
+  15,   /* field[15] = log_lines */
   2,   /* field[2] = param_name */
   8,   /* field[8] = payload_id */
   5,   /* field[5] = remote_path */
@@ -390,7 +403,7 @@ static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
 static const ProtobufCIntRange satdeploy__deploy_request__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 15 }
+  { 0, 16 }
 };
 const ProtobufCMessageDescriptor satdeploy__deploy_request__descriptor =
 {
@@ -400,7 +413,7 @@ const ProtobufCMessageDescriptor satdeploy__deploy_request__descriptor =
   "Satdeploy__DeployRequest",
   "satdeploy",
   sizeof(Satdeploy__DeployRequest),
-  15,
+  16,
   satdeploy__deploy_request__field_descriptors,
   satdeploy__deploy_request__field_indices_by_name,
   1,  satdeploy__deploy_request__number_ranges,
@@ -624,12 +637,12 @@ static const ProtobufCFieldDescriptor satdeploy__deploy_response__field_descript
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
   {
-    "actual_checksum",
+    "log_output",
     6,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_STRING,
     0,   /* quantifier_offset */
-    offsetof(Satdeploy__DeployResponse, actual_checksum),
+    offsetof(Satdeploy__DeployResponse, log_output),
     NULL,
     &protobuf_c_empty_string,
     0,             /* flags */
@@ -649,12 +662,12 @@ static const ProtobufCFieldDescriptor satdeploy__deploy_response__field_descript
   },
 };
 static const unsigned satdeploy__deploy_response__field_indices_by_name[] = {
-  5,   /* field[5] = actual_checksum */
   3,   /* field[3] = apps */
   6,   /* field[6] = backup_path */
   4,   /* field[4] = backups */
   1,   /* field[1] = error_code */
   2,   /* field[2] = error_message */
+  5,   /* field[5] = log_output */
   0,   /* field[0] = success */
 };
 static const ProtobufCIntRange satdeploy__deploy_response__number_ranges[1 + 1] =
@@ -684,7 +697,7 @@ static const ProtobufCEnumValue satdeploy__deploy_command__enum_values_by_number
   { "CMD_DEPLOY", "SATDEPLOY__DEPLOY_COMMAND__CMD_DEPLOY", 2 },
   { "CMD_ROLLBACK", "SATDEPLOY__DEPLOY_COMMAND__CMD_ROLLBACK", 3 },
   { "CMD_LIST_VERSIONS", "SATDEPLOY__DEPLOY_COMMAND__CMD_LIST_VERSIONS", 4 },
-  { "CMD_VERIFY", "SATDEPLOY__DEPLOY_COMMAND__CMD_VERIFY", 5 },
+  { "CMD_LOGS", "SATDEPLOY__DEPLOY_COMMAND__CMD_LOGS", 5 },
   { "CMD_UPLOAD_START", "SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_START", 6 },
   { "CMD_UPLOAD_CHUNK", "SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_CHUNK", 7 },
   { "CMD_UPLOAD_END", "SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_END", 8 },
@@ -696,13 +709,13 @@ static const ProtobufCEnumValueIndex satdeploy__deploy_command__enum_values_by_n
 {
   { "CMD_DEPLOY", 2 },
   { "CMD_LIST_VERSIONS", 4 },
+  { "CMD_LOGS", 5 },
   { "CMD_ROLLBACK", 3 },
   { "CMD_STATUS", 1 },
   { "CMD_UNKNOWN", 0 },
   { "CMD_UPLOAD_CHUNK", 7 },
   { "CMD_UPLOAD_END", 8 },
   { "CMD_UPLOAD_START", 6 },
-  { "CMD_VERIFY", 5 },
 };
 const ProtobufCEnumDescriptor satdeploy__deploy_command__descriptor =
 {
@@ -719,7 +732,7 @@ const ProtobufCEnumDescriptor satdeploy__deploy_command__descriptor =
   satdeploy__deploy_command__value_ranges,
   NULL,NULL,NULL,NULL   /* reserved[1234] */
 };
-static const ProtobufCEnumValue satdeploy__deploy_error__enum_values_by_number[15] =
+static const ProtobufCEnumValue satdeploy__deploy_error__enum_values_by_number[16] =
 {
   { "ERR_NONE", "SATDEPLOY__DEPLOY_ERROR__ERR_NONE", 0 },
   { "ERR_UNKNOWN_COMMAND", "SATDEPLOY__DEPLOY_ERROR__ERR_UNKNOWN_COMMAND", 1 },
@@ -736,11 +749,12 @@ static const ProtobufCEnumValue satdeploy__deploy_error__enum_values_by_number[1
   { "ERR_NO_UPLOAD_IN_PROGRESS", "SATDEPLOY__DEPLOY_ERROR__ERR_NO_UPLOAD_IN_PROGRESS", 12 },
   { "ERR_CHUNK_OUT_OF_ORDER", "SATDEPLOY__DEPLOY_ERROR__ERR_CHUNK_OUT_OF_ORDER", 13 },
   { "ERR_FILE_WRITE_FAILED", "SATDEPLOY__DEPLOY_ERROR__ERR_FILE_WRITE_FAILED", 14 },
+  { "ERR_LOGS_FAILED", "SATDEPLOY__DEPLOY_ERROR__ERR_LOGS_FAILED", 15 },
 };
 static const ProtobufCIntRange satdeploy__deploy_error__value_ranges[] = {
-{0, 0},{0, 15}
+{0, 0},{0, 16}
 };
-static const ProtobufCEnumValueIndex satdeploy__deploy_error__enum_values_by_name[15] =
+static const ProtobufCEnumValueIndex satdeploy__deploy_error__enum_values_by_name[16] =
 {
   { "ERR_APP_NOT_FOUND", 2 },
   { "ERR_BACKUP_FAILED", 4 },
@@ -750,6 +764,7 @@ static const ProtobufCEnumValueIndex satdeploy__deploy_error__enum_values_by_nam
   { "ERR_DTP_DOWNLOAD_FAILED", 5 },
   { "ERR_FILE_WRITE_FAILED", 14 },
   { "ERR_INSTALL_FAILED", 7 },
+  { "ERR_LOGS_FAILED", 15 },
   { "ERR_NONE", 0 },
   { "ERR_NO_BACKUPS", 8 },
   { "ERR_NO_UPLOAD_IN_PROGRESS", 12 },
@@ -765,9 +780,9 @@ const ProtobufCEnumDescriptor satdeploy__deploy_error__descriptor =
   "DeployError",
   "Satdeploy__DeployError",
   "satdeploy",
-  15,
+  16,
   satdeploy__deploy_error__enum_values_by_number,
-  15,
+  16,
   satdeploy__deploy_error__enum_values_by_name,
   1,
   satdeploy__deploy_error__value_ranges,

@@ -145,8 +145,9 @@ class CSPTransport(Transport):
             )
 
         # ZMQ PUB/SUB "slow joiner" — subscriptions need time to propagate
-        # through zmqproxy before messages can be received.
-        time.sleep(0.1)
+        # through zmqproxy before messages can be received. 0.3s handles
+        # rapid reconnects (e.g., push immediately followed by list).
+        time.sleep(0.3)
 
     def disconnect(self) -> None:
         """Close ZMQ connections."""
@@ -204,17 +205,23 @@ class CSPTransport(Transport):
             "flags": id2 & 0x3F,
         }
 
-    def _send_request(self, request: DeployRequest) -> DeployResponse:
+    def _send_request(
+        self, request: DeployRequest, retries: int = 1,
+    ) -> DeployResponse:
         """Send a deploy request and wait for response.
+
+        Retries on timeout to handle ZMQ slow-joiner races where the SUB
+        subscription hasn't propagated through zmqproxy yet.
 
         Args:
             request: The protobuf request message.
+            retries: Number of retry attempts on timeout (default 1).
 
         Returns:
             The protobuf response message.
 
         Raises:
-            TransportError: If send/receive fails or times out.
+            TransportError: If send/receive fails after all retries.
         """
         if not self._pub or not self._sub:
             raise TransportError("Not connected")
@@ -224,40 +231,48 @@ class CSPTransport(Transport):
         payload = request.SerializeToString()
         packet = header + payload
 
-        try:
-            self._pub.send(packet)
+        last_error = None
+        for attempt in range(1 + retries):
+            try:
+                self._pub.send(packet)
 
-            # Loop to skip non-deploy packets (DTP RDP packets on ports 7/8
-            # may arrive while the DTP server is running concurrently)
-            deadline = time.time() + (self.timeout_ms / 1000)
-            while time.time() < deadline:
-                remaining_ms = int((deadline - time.time()) * 1000)
-                if remaining_ms <= 0:
-                    raise TransportError("Request timed out")
+                # Loop to skip non-deploy packets (DTP RDP packets on ports 7/8
+                # may arrive while the DTP server is running concurrently)
+                deadline = time.time() + (self.timeout_ms / 1000)
+                while time.time() < deadline:
+                    remaining_ms = int((deadline - time.time()) * 1000)
+                    if remaining_ms <= 0:
+                        break
 
-                self._sub.setsockopt(zmq.RCVTIMEO, remaining_ms)
-                response_data = self._sub.recv()
+                    self._sub.setsockopt(zmq.RCVTIMEO, remaining_ms)
+                    response_data = self._sub.recv()
 
-                if len(response_data) < CSP_HEADER_SIZE:
-                    continue
+                    if len(response_data) < CSP_HEADER_SIZE:
+                        continue
 
-                # Parse CSP header to check the source port
-                resp_hdr = self._parse_csp_header(response_data[:CSP_HEADER_SIZE])
-                # Only accept packets from the deploy port (port 20)
-                if resp_hdr["sport"] != CSP_DEPLOY_PORT:
-                    continue
+                    # Parse CSP header to check the source port
+                    resp_hdr = self._parse_csp_header(response_data[:CSP_HEADER_SIZE])
+                    # Only accept packets from the deploy port (port 20)
+                    if resp_hdr["sport"] != CSP_DEPLOY_PORT:
+                        continue
 
-                response_payload = response_data[CSP_HEADER_SIZE:]
-                response = DeployResponse()
-                response.ParseFromString(response_payload)
-                return response
+                    response_payload = response_data[CSP_HEADER_SIZE:]
+                    response = DeployResponse()
+                    response.ParseFromString(response_payload)
+                    return response
 
-            raise TransportError("Request timed out")
+                last_error = TransportError("Request timed out")
+                if attempt < retries:
+                    time.sleep(0.3)  # Brief pause before retry
 
-        except zmq.Again:
-            raise TransportError("Request timed out")
-        except zmq.ZMQError as e:
-            raise TransportError(f"ZMQ error: {e}")
+            except zmq.Again:
+                last_error = TransportError("Request timed out")
+                if attempt < retries:
+                    time.sleep(0.3)
+            except zmq.ZMQError as e:
+                raise TransportError(f"ZMQ error: {e}")
+
+        raise last_error
 
     def _compute_checksum(self, file_path: str) -> str:
         """Compute SHA256 checksum of a file.
@@ -290,6 +305,7 @@ class CSPTransport(Transport):
         run_node: Optional[int] = None,
         expected_checksum: Optional[str] = None,
         services: Optional[list[tuple[str, str]]] = None,
+        on_progress: Optional[callable] = None,
     ) -> DeployResult:
         """Deploy a binary via CSP/DTP.
 
@@ -330,6 +346,7 @@ class CSPTransport(Transport):
             node_address=self.ground_node,
             zmq_pub_port=self.zmq_pub_port,
             zmq_sub_port=self.zmq_sub_port,
+            on_progress=on_progress,
         )
         self._dtp_server.start()
 
@@ -461,28 +478,29 @@ class CSPTransport(Transport):
         except TransportError:
             return []
 
-    def verify(self, app_name: str, remote_path: str) -> Optional[str]:
-        """Verify the installed binary checksum via CSP.
+    def get_logs(self, app_name: str, service: str, lines: int = 100) -> Optional[str]:
+        """Fetch service logs via CSP.
 
         Args:
             app_name: Name of the application.
-            remote_path: Path to the binary on target.
+            service: Service name (e.g., controller.service).
+            lines: Number of log lines to fetch.
 
         Returns:
-            The checksum (first 8 chars of SHA256), or None if not found.
+            Log output string, or None on failure.
         """
         if not self._pub:
             return None
 
         request = DeployRequest()
-        request.command = DeployCommand.CMD_VERIFY
+        request.command = DeployCommand.CMD_LOGS
         request.app_name = app_name
-        request.remote_path = remote_path
+        request.log_lines = lines
 
         try:
             response = self._send_request(request)
-            if response.success and response.actual_checksum:
-                return response.actual_checksum
+            if response.success and response.log_output:
+                return response.log_output
             return None
         except TransportError:
             return None

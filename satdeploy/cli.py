@@ -466,7 +466,18 @@ def push(
                 local_path = os.path.expanduser(local or app_config.local) if len(apps) == 1 else os.path.expanduser(app_config.local)
                 remote_path = app_config.remote
 
-                click.echo(f"Deploying {app} via CSP...")
+                file_size = os.path.getsize(local_path)
+
+                def _show_progress(bytes_sent, total):
+                    pct = int(bytes_sent * 100 / total) if total > 0 else 100
+                    bar_width = 20
+                    filled = int(bar_width * bytes_sent / total) if total > 0 else bar_width
+                    bar = "█" * filled + "░" * (bar_width - filled)
+                    click.echo(f"\r  Uploading {app}: {bar} {pct}% ({bytes_sent}/{total} bytes)", nl=False)
+                    if bytes_sent >= total:
+                        click.echo()  # newline when done
+
+                click.echo(f"Deploying {app} via CSP ({file_size} bytes)...")
 
                 result = transport.deploy(
                     app_name=app,
@@ -475,6 +486,7 @@ def push(
                     param_name=app_config.param,
                     appsys_node=module_config.appsys_node,
                     run_node=module_config.get_run_node(app),
+                    on_progress=_show_progress,
                 )
 
                 if result.success:
@@ -635,8 +647,6 @@ def push(
         transport.disconnect()
 
 
-# Alias: "satdeploy deploy" = "satdeploy push" (parity with CSH APM interface)
-main.add_command(push, 'deploy')
 
 
 @main.command()
@@ -1271,22 +1281,18 @@ def logs(app: str, lines: int, config_path: Path | None):
 
     module_config = config.get_target()
 
-    if module_config.transport == "csp":
-        raise SatDeployError(
-            "Logs are not available over CSP transport. "
-            "Use your ground station shell to access logs."
-        )
-
+    transport = get_transport(module_config, config.backup_dir)
     try:
-        with SSHClient(host=module_config.host, user=module_config.user) as ssh:
-            service_manager = ServiceManager(ssh)
-            click.echo(click.style(f"Logs for {app} ({service}):", bold=True))
-            click.echo("")
-            log_output = service_manager.get_logs(service, lines=lines)
+        transport.connect()
+        click.echo(click.style(f"Logs for {app} ({service}):", bold=True))
+        click.echo("")
+        log_output = transport.get_logs(app, service, lines=lines)
+        if log_output:
             click.echo(log_output)
-
-    except SSHError as e:
-        raise SatDeployError(str(e))
+        else:
+            raise SatDeployError(f"Could not retrieve logs for {app}")
+    finally:
+        transport.disconnect()
 
 
 @main.group(cls=ColoredGroup)
@@ -1315,9 +1321,9 @@ def demo_status_cmd():
 
 
 @demo.command()
-def watch():
-    """Stream the satellite agent's logs in real time."""
-    demo_module.demo_watch()
+def shell():
+    """Open an interactive shell on the simulated satellite."""
+    demo_module.demo_shell()
 
 
 @demo.command()

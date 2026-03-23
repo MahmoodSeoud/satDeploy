@@ -63,8 +63,8 @@ typedef struct {
 /* Forward declarations */
 static void handle_status(const Satdeploy__DeployRequest *req,
                           Satdeploy__DeployResponse *resp);
-static void handle_verify(const Satdeploy__DeployRequest *req,
-                          Satdeploy__DeployResponse *resp);
+static void handle_logs(const Satdeploy__DeployRequest *req,
+                        Satdeploy__DeployResponse *resp);
 static void handle_list_versions(const Satdeploy__DeployRequest *req,
                                  Satdeploy__DeployResponse *resp);
 static void handle_rollback(const Satdeploy__DeployRequest *req,
@@ -85,18 +85,12 @@ static csp_socket_t deploy_socket = {0};
  * Handle a single deploy connection.
  */
 static void handle_connection(csp_conn_t *conn) {
-    printf("[deploy] handle_connection called\n");
-    fflush(stdout);
-
     csp_packet_t *packet = csp_read(conn, 10000);
     if (packet == NULL) {
-        printf("[deploy] No data received on connection\n");
+        printf("[deploy] error: no data received\n");
         fflush(stdout);
         return;
     }
-
-    printf("[deploy] Received %u bytes\n", packet->length);
-    fflush(stdout);
 
     /* Parse protobuf request */
     Satdeploy__DeployRequest *req = satdeploy__deploy_request__unpack(
@@ -109,9 +103,6 @@ static void handle_connection(csp_conn_t *conn) {
         return;
     }
 
-    printf("[deploy] Command: %d, App: %s\n", req->command,
-           req->app_name ? req->app_name : "(null)");
-    fflush(stdout);
 
     /* Prepare response */
     Satdeploy__DeployResponse resp = SATDEPLOY__DEPLOY_RESPONSE__INIT;
@@ -121,8 +112,8 @@ static void handle_connection(csp_conn_t *conn) {
         case SATDEPLOY__DEPLOY_COMMAND__CMD_STATUS:
             handle_status(req, &resp);
             break;
-        case SATDEPLOY__DEPLOY_COMMAND__CMD_VERIFY:
-            handle_verify(req, &resp);
+        case SATDEPLOY__DEPLOY_COMMAND__CMD_LOGS:
+            handle_logs(req, &resp);
             break;
         case SATDEPLOY__DEPLOY_COMMAND__CMD_LIST_VERSIONS:
             handle_list_versions(req, &resp);
@@ -158,12 +149,7 @@ static void handle_connection(csp_conn_t *conn) {
 
     if (resp_packet != NULL) {
         resp_packet->length = satdeploy__deploy_response__pack(&resp, resp_packet->data);
-        printf("[deploy] Sending response: %zu bytes, success=%d\n",
-               resp_size, resp.success);
-        fflush(stdout);
         csp_send(conn, resp_packet);
-        printf("[deploy] Response sent\n");
-        fflush(stdout);
     } else {
         printf("[deploy] Failed to allocate response buffer\n");
         fflush(stdout);
@@ -195,7 +181,6 @@ void deploy_handler_loop(void) {
             continue;
         }
 
-        printf("[deploy] Accepted connection\n");
         handle_connection(conn);
         csp_close(conn);
     }
@@ -247,7 +232,6 @@ static void status_metadata_callback(const char *app_name, const char *remote_pa
 static void handle_status(const Satdeploy__DeployRequest *req,
                           Satdeploy__DeployResponse *resp) {
     (void)req;
-    printf("[deploy] STATUS command\n");
 
     static Satdeploy__AppStatusEntry *app_entries[32];
     static Satdeploy__AppStatusEntry app_storage[32];
@@ -266,31 +250,65 @@ static void handle_status(const Satdeploy__DeployRequest *req,
     resp->n_apps = ctx.count;
     resp->apps = app_entries;
 
-    printf("[deploy] Status: agent running, %d deployed apps\n", ctx.count);
+    printf("[status] %d app(s) deployed\n", ctx.count);
+    fflush(stdout);
 }
 
-static void handle_verify(const Satdeploy__DeployRequest *req,
-                          Satdeploy__DeployResponse *resp) {
-    printf("[deploy] VERIFY command for %s at %s\n",
-           req->app_name ? req->app_name : "(null)",
-           req->remote_path ? req->remote_path : "(null)");
+static void handle_logs(const Satdeploy__DeployRequest *req,
+                        Satdeploy__DeployResponse *resp) {
 
-    if (req->remote_path == NULL || strlen(req->remote_path) == 0) {
+    if (req->app_name == NULL || strlen(req->app_name) == 0) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
-        resp->error_message = "No remote_path specified";
+        resp->error_message = "No app_name specified";
         return;
     }
 
-    static char checksum[16];
-    if (compute_file_checksum(req->remote_path, checksum, sizeof(checksum)) == 0) {
-        resp->success = 1;
-        resp->actual_checksum = checksum;
-    } else {
-        resp->success = 0;
-        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
-        resp->error_message = "File not found or unreadable";
+    /* Sanitize app_name: only allow alphanumeric, underscore, hyphen, dot */
+    for (const char *p = req->app_name; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_' || *p == '-' || *p == '.')) {
+            resp->success = 0;
+            resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
+            resp->error_message = "Invalid app_name: only alphanumeric, underscore, hyphen, dot allowed";
+            return;
+        }
     }
+
+    /* Build service name: app_name + ".service" */
+    char service_name[128];
+    snprintf(service_name, sizeof(service_name), "%s.service", req->app_name);
+
+    uint32_t lines = req->log_lines > 0 ? req->log_lines : 100;
+
+    /* Run journalctl to fetch logs */
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "journalctl -u %s -n %u --no-pager 2>&1", service_name, lines);
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) {
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_LOGS_FAILED;
+        resp->error_message = "Failed to execute journalctl";
+        return;
+    }
+
+    /* Read output into buffer */
+    static char log_buf[8192];
+    size_t total = 0;
+    size_t n;
+    while ((n = fread(log_buf + total, 1, sizeof(log_buf) - total - 1, fp)) > 0) {
+        total += n;
+        if (total >= sizeof(log_buf) - 1)
+            break;
+    }
+    log_buf[total] = '\0';
+    pclose(fp);
+
+    resp->success = 1;
+    resp->log_output = log_buf;
+
 }
 
 /**
@@ -346,8 +364,6 @@ static void free_backup_entries(Satdeploy__BackupEntry **entries, size_t count) 
 
 static void handle_list_versions(const Satdeploy__DeployRequest *req,
                                  Satdeploy__DeployResponse *resp) {
-    printf("[deploy] LIST_VERSIONS command for %s\n",
-           req->app_name ? req->app_name : "(null)");
 
     if (req->app_name == NULL || strlen(req->app_name) == 0) {
         resp->success = 0;
@@ -440,7 +456,8 @@ static void handle_list_versions(const Satdeploy__DeployRequest *req,
         }
     }
 
-    printf("[deploy] Found %zu versions for %s (newest first)\n", col.count, req->app_name);
+    printf("[list]   %s: %zu version(s)\n", req->app_name, col.count);
+    fflush(stdout);
 
     resp->success = 1;
     resp->n_backups = col.count;
@@ -498,9 +515,9 @@ static void rollback_collect_callback(const char *version, const char *timestamp
 
 static void handle_rollback(const Satdeploy__DeployRequest *req,
                             Satdeploy__DeployResponse *resp) {
-    printf("[deploy] ROLLBACK command for %s, hash=%s\n",
-           req->app_name ? req->app_name : "(null)",
-           req->rollback_hash ? req->rollback_hash : "(dial)");
+    printf("[deploy] %s → rolling back\n",
+           req->app_name ? req->app_name : "(null)");
+    fflush(stdout);
 
     if (!req->app_name || !req->app_name[0]) {
         resp->success = 0;
@@ -516,7 +533,6 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
         if (app_metadata_get(req->app_name, meta_remote_path, sizeof(meta_remote_path),
                              NULL, 0, NULL, 0) == 0 && meta_remote_path[0]) {
             remote_path = meta_remote_path;
-            printf("[deploy] Resolved remote_path from metadata: %s\n", remote_path);
         } else {
             resp->success = 0;
             resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
@@ -528,7 +544,6 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
     /* Get current deployed hash */
     char current_hash[16] = {0};
     compute_file_checksum(remote_path, current_hash, sizeof(current_hash));
-    printf("[deploy] Current deployed hash: %s\n", current_hash[0] ? current_hash : "(none)");
 
     /* Collect all backups (single filesystem traversal) */
     rollback_search_t search = {0};
@@ -581,11 +596,6 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
             }
         }
 
-        printf("[deploy] Dial entries (by time, newest first): ");
-        for (int i = 0; i < search.entry_count; i++) {
-            printf("%s ", search.entries[i].hash);
-        }
-        printf("\n");
 
         /* Find current hash position */
         int current_idx = -1;
@@ -600,11 +610,8 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
         int next_idx = (current_idx < 0) ? 0 : (current_idx + 1) % search.entry_count;
         selected = &search.entries[next_idx];
 
-        printf("[deploy] Dial: current=%s idx=%d -> next idx=%d hash=%s\n",
-               current_hash, current_idx, next_idx, selected->hash);
     }
 
-    printf("[deploy] Restoring backup: %s -> %s\n", selected->path, remote_path);
 
     /* Backup current version if not already in backups (check in-memory, no second traversal) */
     if (current_hash[0]) {
@@ -619,10 +626,8 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
         if (!current_in_backups) {
             char backup_path[MAX_PATH_LEN];
             if (backup_create(req->app_name, remote_path, backup_path, sizeof(backup_path)) == 0) {
-                printf("[deploy] Backed up current version (%s) to: %s\n", current_hash, backup_path);
             }
         } else {
-            printf("[deploy] Current version (%s) already in backups\n", current_hash);
         }
     }
 
@@ -636,7 +641,8 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
 
     /* Update metadata - trust the hash we already know, don't recompute */
     app_metadata_save(req->app_name, remote_path, selected->hash);
-    printf("[deploy] Updated metadata: %s -> %s\n", req->app_name, selected->hash);
+    printf("\033[32m[deploy] %s → rolled back to %s\033[0m\n", req->app_name, selected->hash);
+    fflush(stdout);
 
     /* Return the backup path that was restored */
     static char restored_path[MAX_PATH_LEN];
@@ -649,14 +655,9 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
 
 static void handle_deploy(const Satdeploy__DeployRequest *req,
                           Satdeploy__DeployResponse *resp) {
-    printf("[deploy] DEPLOY command for %s\n",
+    printf("[deploy] %s → deploying\n",
            req->app_name ? req->app_name : "(null)");
-    printf("  remote_path: %s\n", req->remote_path ? req->remote_path : "(null)");
-    printf("  dtp_server: node=%u port=%u payload=%u\n",
-           req->dtp_server_node, req->dtp_server_port, req->payload_id);
-    printf("  expected: size=%u checksum=%s\n",
-           req->expected_size,
-           req->expected_checksum ? req->expected_checksum : "(null)");
+    fflush(stdout);
 
     /* Validate required fields */
     if (req->app_name == NULL || strlen(req->app_name) == 0) {
@@ -680,17 +681,13 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         return;
     }
 
-    /* Step 1: TODO - Stop app via libparam if running
-       For now, we skip this step since libparam integration requires
-       knowing the param_name and target node */
-    printf("[deploy] Step 1: Skipping app stop (not implemented)\n");
+    /* TODO: Stop app via libparam if running */
 
     /* Step 2: Backup current binary if it exists */
     static char backup_path_buf[MAX_PATH_LEN];
     backup_path_buf[0] = '\0';
 
     if (access(req->remote_path, F_OK) == 0) {
-        printf("[deploy] Step 2: Creating backup of %s\n", req->remote_path);
         if (backup_create(req->app_name, req->remote_path,
                           backup_path_buf, sizeof(backup_path_buf)) != 0) {
             resp->success = 0;
@@ -698,13 +695,9 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
             resp->error_message = "Failed to backup current binary";
             return;
         }
-        printf("[deploy] Backup created: %s\n", backup_path_buf);
-    } else {
-        printf("[deploy] Step 2: No existing binary to backup\n");
     }
 
-    /* Step 3: Download new binary via DTP */
-    printf("[deploy] Step 3: Downloading new binary via DTP\n");
+    /* Download new binary via DTP */
 
     /* Download to a temp file first */
     char temp_path[MAX_PATH_LEN];
@@ -719,9 +712,8 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         return;
     }
 
-    /* Step 4: Verify checksum */
+    /* Verify checksum */
     if (req->expected_checksum != NULL && strlen(req->expected_checksum) > 0) {
-        printf("[deploy] Step 4: Verifying checksum\n");
         static char actual_checksum[16];
         if (compute_file_checksum(temp_path, actual_checksum, sizeof(actual_checksum)) != 0) {
             resp->success = 0;
@@ -732,7 +724,7 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         }
 
         if (strcmp(actual_checksum, req->expected_checksum) != 0) {
-            printf("[deploy] Checksum mismatch: expected=%s, actual=%s\n",
+            printf("\033[31m[deploy] checksum mismatch: expected=%s actual=%s\033[0m\n",
                    req->expected_checksum, actual_checksum);
             resp->success = 0;
             resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
@@ -740,13 +732,11 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
             unlink(temp_path);
             return;
         }
-        printf("[deploy] Checksum verified: %s\n", actual_checksum);
-    } else {
-        printf("[deploy] Step 4: Skipping checksum verification (none provided)\n");
+        printf("[deploy] checksum ok: %s\n", actual_checksum);
+        fflush(stdout);
     }
 
-    /* Step 5: Install binary (move temp to final location) */
-    printf("[deploy] Step 5: Installing binary to %s\n", req->remote_path);
+    /* Install binary (move temp to final location) */
     if (rename(temp_path, req->remote_path) != 0) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_INSTALL_FAILED;
@@ -764,19 +754,19 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
     /* Save app metadata for status/list queries */
     if (app_metadata_save(req->app_name, req->remote_path,
                           req->expected_checksum) != 0) {
-        printf("[deploy] Warning: Failed to save app metadata\n");
+        printf("\033[33m[deploy] warning: failed to save app metadata\033[0m\n");
     }
 
-    /* Step 6: TODO - Start app via libparam
-       For now, we skip this step */
-    printf("[deploy] Step 6: Skipping app start (not implemented)\n");
+    /* TODO: Start app via libparam */
 
     /* Success */
     resp->success = 1;
     if (backup_path_buf[0] != '\0') {
         resp->backup_path = backup_path_buf;
     }
-    printf("[deploy] Deploy complete!\n");
+    printf("\033[32m[deploy] %s → installed at %s\033[0m\n",
+           req->app_name, req->remote_path);
+    fflush(stdout);
 }
 
 /* --- Direct Upload Handlers --- */

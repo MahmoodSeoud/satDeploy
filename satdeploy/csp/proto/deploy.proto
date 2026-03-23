@@ -13,7 +13,7 @@ enum DeployCommand {
     CMD_DEPLOY = 2;      // Stop app, backup, download binary, install, start app
     CMD_ROLLBACK = 3;    // Restore previous version
     CMD_LIST_VERSIONS = 4; // List available backups for an app
-    CMD_VERIFY = 5;      // Check installed binary checksum
+    CMD_LOGS = 5;        // Fetch service logs from target
 }
 
 // Request message sent from ground to satellite
@@ -40,6 +40,9 @@ message DeployRequest {
 
     // For rollback command
     string rollback_hash = 12;  // Specific backup hash to restore (optional)
+
+    // For CMD_LOGS
+    uint32 log_lines = 16;         // Number of log lines to fetch (default: 100)
 }
 
 // Backup information returned by CMD_LIST_VERSIONS
@@ -70,8 +73,8 @@ message DeployResponse {
     // For CMD_LIST_VERSIONS
     repeated BackupEntry backups = 5;
 
-    // For CMD_VERIFY
-    string actual_checksum = 6;
+    // For CMD_LOGS
+    string log_output = 6;
 
     // For CMD_DEPLOY
     string backup_path = 7;
@@ -90,4 +93,5 @@ enum DeployError {
     ERR_NO_BACKUPS = 8;
     ERR_BACKUP_NOT_FOUND = 9;
     ERR_RESTORE_FAILED = 10;
+    ERR_LOGS_FAILED = 15;
 }

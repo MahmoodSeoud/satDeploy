@@ -142,15 +142,16 @@ class Transport(ABC):
         pass
 
     @abstractmethod
-    def verify(self, app_name: str, remote_path: str) -> Optional[str]:
-        """Verify the installed binary checksum.
+    def get_logs(self, app_name: str, service: str, lines: int = 100) -> Optional[str]:
+        """Fetch service logs from the target.
 
         Args:
             app_name: Name of the application.
-            remote_path: Path to the binary on target.
+            service: Service name (e.g., controller.service).
+            lines: Number of log lines to fetch.
 
         Returns:
-            The checksum (first 8 chars of SHA256), or None if not found.
+            Log output string, or None on failure.
         """
         pass
 

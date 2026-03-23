@@ -95,6 +95,7 @@ class DTPServer:
         mtu: int = 256,
         zmq_pub_port: int = ZMQ_PROXY_SUB_PORT,
         zmq_sub_port: int = ZMQ_PROXY_PUB_PORT,
+        on_progress: Optional[callable] = None,
     ):
         self.local_path = local_path
         self.payload_id = payload_id
@@ -104,6 +105,7 @@ class DTPServer:
         self.mtu = mtu
         self.zmq_pub_port = zmq_pub_port
         self.zmq_sub_port = zmq_sub_port
+        self.on_progress = on_progress
 
         self._context: Optional[zmq.Context] = None
         self._pub: Optional[zmq.Socket] = None
@@ -255,6 +257,8 @@ class DTPServer:
                 continue
 
             offset = end
+            if self.on_progress:
+                self.on_progress(offset, self._file_size)
             # Pace the transmission
             time.sleep(0.001)
 

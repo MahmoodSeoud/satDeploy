@@ -54,7 +54,7 @@ class TestTransportInterface:
             def list_backups(self, app_name):
                 return []
 
-            def verify(self, app_name, remote_path):
+            def get_logs(self, app_name, service, lines=100):
                 return None
 
         transport = DummyTransport()

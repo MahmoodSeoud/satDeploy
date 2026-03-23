@@ -13,7 +13,7 @@ enum DeployCommand {
     CMD_DEPLOY = 2;        // (Legacy) Deploy via DTP download
     CMD_ROLLBACK = 3;      // Restore previous version
     CMD_LIST_VERSIONS = 4; // List available backups for an app
-    CMD_VERIFY = 5;        // Check installed binary checksum
+    CMD_LOGS = 5;          // Fetch service logs from target
     CMD_UPLOAD_START = 6;  // Start direct file upload (sends metadata)
     CMD_UPLOAD_CHUNK = 7;  // File data chunk
     CMD_UPLOAD_END = 8;    // End upload and trigger install
@@ -48,6 +48,9 @@ message DeployRequest {
     uint32 chunk_seq = 13;      // Chunk sequence number (0-based)
     uint32 total_chunks = 14;   // Total number of chunks
     bytes chunk_data = 15;      // File data chunk (max ~1500 bytes per chunk)
+
+    // For CMD_LOGS
+    uint32 log_lines = 16;         // Number of log lines to fetch (default: 100)
 }
 
 // Backup information returned by CMD_LIST_VERSIONS
@@ -78,8 +81,8 @@ message DeployResponse {
     // For CMD_LIST_VERSIONS
     repeated BackupEntry backups = 5;
 
-    // For CMD_VERIFY
-    string actual_checksum = 6;
+    // For CMD_LOGS
+    string log_output = 6;
 
     // For CMD_DEPLOY
     string backup_path = 7;
@@ -102,4 +105,5 @@ enum DeployError {
     ERR_NO_UPLOAD_IN_PROGRESS = 12;
     ERR_CHUNK_OUT_OF_ORDER = 13;
     ERR_FILE_WRITE_FAILED = 14;
+    ERR_LOGS_FAILED = 15;
 }

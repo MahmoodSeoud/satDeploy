@@ -73,12 +73,10 @@ apps:
 
     def test_logs_shows_journalctl_output(self, runner, config_with_app, mocker):
         """Logs command shows output from journalctl."""
-        mock_ssh = mocker.MagicMock()
-        mock_ssh.__enter__ = mocker.MagicMock(return_value=mock_ssh)
-        mock_ssh.__exit__ = mocker.MagicMock(return_value=False)
-        mock_ssh.run.return_value.stdout = "Dec 26 10:00:00 flatsat controller[1234]: Starting up\nDec 26 10:00:01 flatsat controller[1234]: Ready"
+        mock_transport = mocker.MagicMock()
+        mock_transport.get_logs.return_value = "Dec 26 10:00:00 flatsat controller[1234]: Starting up\nDec 26 10:00:01 flatsat controller[1234]: Ready"
 
-        mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
+        mocker.patch("satdeploy.cli.get_transport", return_value=mock_transport)
 
         result = runner.invoke(main, ["logs", "controller", "--config", str(config_with_app)])
         assert result.exit_code == 0
@@ -87,35 +85,25 @@ apps:
 
     def test_logs_accepts_lines_option(self, runner, config_with_app, mocker):
         """Logs command accepts --lines option."""
-        mock_ssh = mocker.MagicMock()
-        mock_ssh.__enter__ = mocker.MagicMock(return_value=mock_ssh)
-        mock_ssh.__exit__ = mocker.MagicMock(return_value=False)
-        mock_ssh.run.return_value.stdout = "log line"
+        mock_transport = mocker.MagicMock()
+        mock_transport.get_logs.return_value = "log line"
 
-        mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
+        mocker.patch("satdeploy.cli.get_transport", return_value=mock_transport)
 
         result = runner.invoke(main, ["logs", "controller", "--lines", "50", "--config", str(config_with_app)])
         assert result.exit_code == 0
-        # Verify journalctl was called with correct number of lines
-        mock_ssh.run.assert_called()
-        call_args = str(mock_ssh.run.call_args)
-        assert "-n 50" in call_args or "-n50" in call_args
+        mock_transport.get_logs.assert_called_once_with("controller", "controller.service", lines=50)
 
     def test_logs_default_lines_is_100(self, runner, config_with_app, mocker):
         """Logs command defaults to 100 lines."""
-        mock_ssh = mocker.MagicMock()
-        mock_ssh.__enter__ = mocker.MagicMock(return_value=mock_ssh)
-        mock_ssh.__exit__ = mocker.MagicMock(return_value=False)
-        mock_ssh.run.return_value.stdout = "log line"
+        mock_transport = mocker.MagicMock()
+        mock_transport.get_logs.return_value = "log line"
 
-        mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
+        mocker.patch("satdeploy.cli.get_transport", return_value=mock_transport)
 
         result = runner.invoke(main, ["logs", "controller", "--config", str(config_with_app)])
         assert result.exit_code == 0
-        # Verify journalctl was called with 100 lines
-        mock_ssh.run.assert_called()
-        call_args = str(mock_ssh.run.call_args)
-        assert "-n 100" in call_args or "-n100" in call_args
+        mock_transport.get_logs.assert_called_once_with("controller", "controller.service", lines=100)
 
 
 class TestLogsPolishedOutput:
@@ -149,12 +137,10 @@ apps:
 
     def test_logs_shows_header(self, runner, config_with_app, mocker):
         """Logs command should show a header with app name."""
-        mock_ssh = mocker.MagicMock()
-        mock_ssh.__enter__ = mocker.MagicMock(return_value=mock_ssh)
-        mock_ssh.__exit__ = mocker.MagicMock(return_value=False)
-        mock_ssh.run.return_value.stdout = "Dec 26 10:00:00 flatsat controller[1234]: Starting up"
+        mock_transport = mocker.MagicMock()
+        mock_transport.get_logs.return_value = "Dec 26 10:00:00 flatsat controller[1234]: Starting up"
 
-        mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
+        mocker.patch("satdeploy.cli.get_transport", return_value=mock_transport)
 
         result = runner.invoke(
             main,

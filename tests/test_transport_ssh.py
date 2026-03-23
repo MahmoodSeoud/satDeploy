@@ -268,35 +268,26 @@ class TestSSHTransportListBackups:
         assert backups[0].binary_hash == "abc12345"
 
 
-class TestSSHTransportVerify:
-    """Test SSH verification."""
+class TestSSHTransportLogs:
+    """Test SSH log fetching."""
 
     @patch("satdeploy.transport.ssh.SSHClient")
     @patch("satdeploy.transport.ssh.Deployer")
     @patch("satdeploy.transport.ssh.ServiceManager")
-    def test_verify_returns_checksum(self, mock_svc_class, mock_deployer_class, mock_ssh_class):
-        """verify() returns the remote checksum."""
-        mock_deployer = mock_deployer_class.return_value
-        mock_deployer.compute_remote_hash.return_value = "abc12345"
+    def test_get_logs(self, mock_svc_class, mock_deployer_class, mock_ssh_class):
+        """get_logs() returns service log output."""
+        mock_ssh = mock_ssh_class.return_value
+        mock_result = MagicMock()
+        mock_result.stdout = "Mar 22 service started\nMar 22 listening on port 8080"
+        mock_ssh.run.return_value = mock_result
 
-        transport = SSHTransport("192.168.1.50", "root", "/backups")
+        transport = SSHTransport(host="192.168.1.100", user="root", backup_dir="/backups")
         transport.connect()
+        log_output = transport.get_logs("test_app", "test_app.service", lines=50)
+        assert log_output == "Mar 22 service started\nMar 22 listening on port 8080"
 
-        checksum = transport.verify("test_app", "/usr/bin/test_app")
-
-        assert checksum == "abc12345"
-
-    @patch("satdeploy.transport.ssh.SSHClient")
-    @patch("satdeploy.transport.ssh.Deployer")
-    @patch("satdeploy.transport.ssh.ServiceManager")
-    def test_verify_returns_none_when_file_missing(self, mock_svc_class, mock_deployer_class, mock_ssh_class):
-        """verify() returns None when file doesn't exist."""
-        mock_deployer = mock_deployer_class.return_value
-        mock_deployer.compute_remote_hash.return_value = None
-
-        transport = SSHTransport("192.168.1.50", "root", "/backups")
-        transport.connect()
-
-        checksum = transport.verify("test_app", "/usr/bin/test_app")
-
-        assert checksum is None
+    def test_get_logs_not_connected(self):
+        """get_logs() returns None when not connected."""
+        transport = SSHTransport(host="192.168.1.100", user="root", backup_dir="/backups")
+        log_output = transport.get_logs("test_app", "test_app.service")
+        assert log_output is None

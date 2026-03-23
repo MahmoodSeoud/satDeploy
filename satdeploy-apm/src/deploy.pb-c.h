@@ -47,7 +47,7 @@ typedef enum _Satdeploy__DeployCommand {
   /*
    * Check installed binary checksum
    */
-  SATDEPLOY__DEPLOY_COMMAND__CMD_VERIFY = 5,
+  SATDEPLOY__DEPLOY_COMMAND__CMD_LOGS = 5,
   /*
    * Start direct file upload (sends metadata)
    */
@@ -80,7 +80,8 @@ typedef enum _Satdeploy__DeployError {
   SATDEPLOY__DEPLOY_ERROR__ERR_UPLOAD_IN_PROGRESS = 11,
   SATDEPLOY__DEPLOY_ERROR__ERR_NO_UPLOAD_IN_PROGRESS = 12,
   SATDEPLOY__DEPLOY_ERROR__ERR_CHUNK_OUT_OF_ORDER = 13,
-  SATDEPLOY__DEPLOY_ERROR__ERR_FILE_WRITE_FAILED = 14
+  SATDEPLOY__DEPLOY_ERROR__ERR_FILE_WRITE_FAILED = 14,
+  SATDEPLOY__DEPLOY_ERROR__ERR_LOGS_FAILED = 15
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(SATDEPLOY__DEPLOY_ERROR)
 } Satdeploy__DeployError;
 
@@ -164,10 +165,14 @@ struct  Satdeploy__DeployRequest
    * File data chunk (max ~1500 bytes per chunk)
    */
   ProtobufCBinaryData chunk_data;
+  /*
+   * Number of log lines to retrieve (for CMD_LOGS)
+   */
+  uint32_t log_lines;
 };
 #define SATDEPLOY__DEPLOY_REQUEST__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&satdeploy__deploy_request__descriptor) \
-    , SATDEPLOY__DEPLOY_COMMAND__CMD_UNKNOWN, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, (char *)protobuf_c_empty_string, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, {0,NULL} }
+    , SATDEPLOY__DEPLOY_COMMAND__CMD_UNKNOWN, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, (char *)protobuf_c_empty_string, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, {0,NULL}, 0 }
 
 
 /*
@@ -234,9 +239,9 @@ struct  Satdeploy__DeployResponse
   size_t n_backups;
   Satdeploy__BackupEntry **backups;
   /*
-   * For CMD_VERIFY
+   * For CMD_LOGS
    */
-  char *actual_checksum;
+  char *log_output;
   /*
    * For CMD_DEPLOY
    */
