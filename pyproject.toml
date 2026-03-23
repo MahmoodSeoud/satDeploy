@@ -5,8 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "satdeploy"
 version = "0.1.0"
-description = "CLI tool for deploying binaries to embedded Linux targets"
-readme = "PLAN.md"
+description = "Deployment tool for embedded Linux satellites — push, track, rollback over SSH and CSP"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Mahmood Seoud"}]
 requires-python = ">=3.8"
 dependencies = [
     "click>=8.0",

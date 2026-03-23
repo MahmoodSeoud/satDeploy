@@ -105,9 +105,13 @@ def _repo_root() -> Path:
 
 
 def _find_repo_compose() -> Path | None:
-    """Find the repo's docker-compose.yml if we're in a git checkout."""
-    compose = _repo_root() / "docker-compose.yml"
-    return compose if compose.exists() else None
+    """Find the repo's docker-compose.yml if we're in a git checkout.
+
+    NOTE: The repo's docker-compose.yml is for DEVELOPMENT (compiling agent/APM
+    from source). The demo always uses the standalone sim image so users never
+    have to build anything. Returns None to force standalone mode.
+    """
+    return None  # Always use standalone sim image for demo
 
 
 def _find_demo_binary(version: str) -> Path:
@@ -204,12 +208,24 @@ def _write_demo_config() -> None:
 
 
 def _copy_demo_binary() -> None:
-    """Copy v2 demo binary to the demo binaries directory."""
-    source = _find_demo_binary("v2")
+    """Prepare v2 demo binary in the demo binaries directory.
+
+    If running from a repo checkout, copies the real v2 binary.
+    If installed via pip (no repo), creates a simple shell script
+    that serves as a "new version" for the demo.
+    """
     dest_dir = DEMO_DIR / "binaries"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / "test_app"
-    shutil.copy2(source, dest)
+
+    # Try repo first
+    try:
+        source = _find_demo_binary("v2")
+        shutil.copy2(source, dest)
+    except SatDeployError:
+        # No repo — create a synthetic v2 binary for the demo
+        dest.write_text("#!/bin/sh\necho 'test_app v2 (satdeploy demo)'\n")
+
     dest.chmod(0o755)
 
 

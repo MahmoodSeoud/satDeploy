@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     fonts-powerline \
     libcurl4-openssl-dev \
     libzmq3-dev \
+    libsqlite3-dev \
     libsocketcan-dev \
     libcap2-bin \
     python3-dev \

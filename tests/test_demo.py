@@ -76,11 +76,11 @@ class TestFindDemoBinary:
 
 
 class TestFindRepoCompose:
-    def test_finds_compose_in_repo(self):
+    def test_always_returns_none_for_standalone_demo(self):
+        # Demo always uses standalone mode (pre-built sim image),
+        # so _find_repo_compose always returns None
         compose = _find_repo_compose()
-        # We're running from the repo, so it should find docker-compose.yml
-        assert compose is not None
-        assert compose.name == "docker-compose.yml"
+        assert compose is None
 
 
 class TestIsAgentContainerRunning:
