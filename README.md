@@ -15,15 +15,16 @@ pip install -e .
 satdeploy demo start
 ```
 
-This pulls a container with a simulated satellite, configures everything, and prints a guided tutorial. Then:
+This starts a simulated satellite with Docker, configures a test app, and prints a quick-start guide. Then:
 
 ```bash
-satdeploy status --config ~/.satdeploy/.demo-config.yaml        # See what's deployed
-satdeploy push test_app --config ~/.satdeploy/.demo-config.yaml  # Deploy a binary
-satdeploy list test_app --config ~/.satdeploy/.demo-config.yaml  # See version history
-satdeploy rollback test_app --config ~/.satdeploy/.demo-config.yaml  # Roll back
-satdeploy demo watch                                    # Stream agent logs
-satdeploy demo stop                                     # Clean up
+satdeploy status              # See what's deployed
+satdeploy push test_app       # Deploy a binary
+satdeploy list test_app       # See version history
+satdeploy rollback test_app   # Roll back
+satdeploy logs test_app       # View service logs
+satdeploy demo shell          # Shell into the satellite
+satdeploy demo stop           # Clean up
 ```
 
 Docker is only used for the demo simulator. Real deployments use SSH or CSP directly.
@@ -61,7 +62,6 @@ pip install -e .
 
 | Command | Description |
 |---------|-------------|
-| `satdeploy init` | Interactive setup |
 | `satdeploy push <app>` | Deploy binary |
 | `satdeploy push --all` | Deploy all apps |
 | `satdeploy push --require-clean` | Refuse to deploy from dirty git tree |
@@ -73,7 +73,7 @@ pip install -e .
 | `satdeploy config` | Show configuration |
 | `satdeploy demo start` | Start simulated satellite (Docker) |
 | `satdeploy demo stop` | Stop simulator |
-| `satdeploy demo watch` | Stream agent logs |
+| `satdeploy demo shell` | Shell into the satellite (streams agent logs) |
 | `satdeploy demo eject` | Generate config for real hardware |
 
 All commands accept `--config` to select which target config to use (e.g. `--config ~/.satdeploy/som2/config.yaml`).
@@ -120,9 +120,9 @@ Each target gets its own config directory (e.g. `~/.satdeploy/som1/config.yaml`)
 ```yaml
 name: som1
 transport: csp
-zmq_endpoint: tcp://localhost:4040
-agent_node: 5424
-ground_node: 4040
+zmq_endpoint: tcp://localhost:9600
+agent_node: 5425
+ground_node: 40
 appsys_node: 10
 
 backup_dir: /opt/satdeploy/backups
@@ -178,9 +178,9 @@ For satellite communication links. Requires `satdeploy-agent` running on target.
 ```yaml
 name: satellite
 transport: csp
-zmq_endpoint: tcp://localhost:4040
-agent_node: 5424
-ground_node: 4040
+zmq_endpoint: tcp://localhost:9600
+agent_node: 5425
+ground_node: 40
 ```
 
 ## Dependency Resolution
@@ -204,11 +204,7 @@ For libraries with a `restart` list, those services are restarted directly.
 After trying the demo, transition to your actual target:
 
 ```bash
-# Generate a config template for your hardware
 satdeploy demo eject
-
-# Or set up manually
-satdeploy init --config ~/.satdeploy/my-target
 ```
 
 For SSH targets, you just need network access and an SSH key. For CSP targets, you need:
@@ -243,7 +239,7 @@ Then in csh: `satdeploy help`
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.12+
 - Docker (for demo mode only)
 - SSH access to target (for SSH transport)
 - `satdeploy-agent` on target (for CSP transport)

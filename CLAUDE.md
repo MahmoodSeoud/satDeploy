@@ -93,20 +93,19 @@ Runs on target, listens on CSP port 20 for protobuf commands:
 ### satdeploy-apm Slash Commands
 
 Ground station csh module providing:
-- `satdeploy status` - Query agent status
-- `satdeploy deploy <app>` - Deploy binary
-- `satdeploy rollback <app>` - Rollback
-- `satdeploy list <app>` - List backups
-- `satdeploy verify <app>` - Verify checksum
+- `satdeploy status` - Show status of deployed apps and services
+- `satdeploy push <app>` - Deploy one or more apps to a target
+- `satdeploy rollback <app>` - Rollback to a previous version
+- `satdeploy list <app>` - List all versions of an app (deployed + backups)
+- `satdeploy logs <app>` - Show logs for an app's service
 
 ## CLI Commands
 
 ```bash
-satdeploy init                      # Interactive setup
-satdeploy deploy <app>              # Deploy binary (alias: push)
-satdeploy deploy <app> --local ./path # Deploy with path override
-satdeploy deploy --all              # Deploy all apps
-satdeploy deploy --require-clean    # Refuse to deploy from dirty git tree
+satdeploy push <app>                # Deploy binary
+satdeploy push <app> --local ./path # Deploy with path override
+satdeploy push --all                # Deploy all apps
+satdeploy push --require-clean      # Refuse to deploy from dirty git tree
 satdeploy status                    # Show all app statuses with git provenance
 satdeploy list <app>                # List versions (deployed + backups)
 satdeploy rollback <app>            # Restore previous version
@@ -115,7 +114,7 @@ satdeploy logs <app>                # Show service logs
 satdeploy config                    # Show current config
 satdeploy demo start                # Start simulated satellite (Docker)
 satdeploy demo stop                 # Stop simulator
-satdeploy demo watch                # Stream agent logs
+satdeploy demo shell                # Shell into the satellite (streams agent logs)
 satdeploy demo eject                # Generate config for real hardware
 
 # Switch targets with --config
