@@ -1,12 +1,14 @@
 name: Build and publish simulator image
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - 'satdeploy-agent/**'
       - 'demo/**'
       - 'Dockerfile.sim'
+      - '.github/workflows/docker-publish.yml'
 
 env:
   REGISTRY: ghcr.io
