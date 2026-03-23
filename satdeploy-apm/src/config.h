@@ -19,14 +19,12 @@ typedef struct {
     char name[MAX_APP_NAME_LEN];
     char local_path[MAX_PATH_LEN];      /* Local binary path (on ground station) */
     char remote_path[MAX_PATH_LEN];     /* Remote install path (on satellite) */
-    char param[MAX_APP_NAME_LEN];       /* libparam name for start/stop (e.g., mng_dipp) */
-    uint32_t csp_node;                  /* CSP node address app runs as (for restart) */
 } satdeploy_app_config_t;
 
 /* Global configuration */
 typedef struct {
-    /* Defaults */
-    uint32_t appsys_node;               /* app-sys-manager CSP node (e.g., 5421) */
+    /* Agent address */
+    uint32_t agent_node;                /* satdeploy-agent CSP node address */
 
     /* App configs */
     satdeploy_app_config_t apps[MAX_APPS];

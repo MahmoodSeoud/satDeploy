@@ -91,7 +91,7 @@ satdeploy_config_t *satdeploy_config_load(void)
     yaml_parser_set_input_file(&parser, file);
 
     /* Set defaults */
-    g_config.appsys_node = 0;
+    g_config.agent_node = 0;
     g_config.num_apps = 0;
 
     parse_state_t state = STATE_START;
@@ -166,8 +166,8 @@ satdeploy_config_t *satdeploy_config_load(void)
                 safe_strcpy(current_key, value, sizeof(current_key));
                 state = STATE_DEFAULTS_KEY;
             } else if (state == STATE_DEFAULTS_KEY) {
-                if (strcmp(current_key, "appsys_node") == 0) {
-                    g_config.appsys_node = (uint32_t)atoi(value);
+                if (strcmp(current_key, "agent_node") == 0) {
+                    g_config.agent_node = (uint32_t)atoi(value);
                 }
                 state = STATE_DEFAULTS;
             } else if (state == STATE_MODULES) {
@@ -202,11 +202,6 @@ satdeploy_config_t *satdeploy_config_load(void)
                            strcmp(current_key, "remote") == 0) {
                     safe_strcpy(current_app->remote_path, value,
                                sizeof(current_app->remote_path));
-                } else if (strcmp(current_key, "param") == 0) {
-                    safe_strcpy(current_app->param, value,
-                               sizeof(current_app->param));
-                } else if (strcmp(current_key, "csp_node") == 0) {
-                    current_app->csp_node = (uint32_t)atoi(value);
                 }
                 state = STATE_APP_MAP;
             }

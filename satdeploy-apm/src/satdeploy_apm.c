@@ -21,16 +21,86 @@
 #include <slash/optparse.h>
 #include <csp/csp.h>
 #include <apm/csh_api.h>
-#include <param/param.h>
-#include <param/param_list.h>
-#include <param/param_client.h>
-
 #include "deploy.pb-c.h"
 #include "config.h"
 #include "output.h"
 
 #define SATDEPLOY_PORT 20
 #define DEFAULT_TIMEOUT 10000
+
+/*
+ * Tab completion for app names from config
+ */
+static void app_name_completer(struct slash *slash, char *token)
+{
+    satdeploy_config_t *cfg = satdeploy_config_load();
+    if (!cfg || !cfg->loaded || cfg->num_apps == 0)
+        return;
+
+    /* Find the token to complete (last word in the buffer) */
+    char *tok = token;
+    size_t tok_len = strlen(tok);
+
+    /* Strip leading spaces */
+    while (*tok == ' ')
+        tok++;
+    tok_len = strlen(tok);
+
+    int matches = 0;
+    int last_match = -1;
+
+    /* Count matches and print if multiple */
+    for (int i = 0; i < cfg->num_apps; i++) {
+        if (tok_len == 0 || strncmp(tok, cfg->apps[i].name, tok_len) == 0) {
+            matches++;
+            last_match = i;
+        }
+    }
+
+    if (matches == 0) {
+        return;
+    } else if (matches == 1) {
+        /* Single match — complete it */
+        size_t prefix_len = token - slash->buffer;
+        /* Preserve leading space */
+        if (*token == ' ')
+            prefix_len++;
+        snprintf(slash->buffer + prefix_len, slash->line_size - prefix_len,
+                 "%s", cfg->apps[last_match].name);
+        slash->length = prefix_len + strlen(cfg->apps[last_match].name);
+        slash->cursor = slash->length;
+    } else {
+        /* Multiple matches — find common prefix and print all */
+        printf("\n");
+        size_t common = strlen(cfg->apps[0].name);
+        int first_match = -1;
+        for (int i = 0; i < cfg->num_apps; i++) {
+            if (tok_len == 0 || strncmp(tok, cfg->apps[i].name, tok_len) == 0) {
+                printf("  %s\n", cfg->apps[i].name);
+                if (first_match == -1) {
+                    first_match = i;
+                } else {
+                    size_t p = 0;
+                    while (p < common &&
+                           cfg->apps[first_match].name[p] &&
+                           cfg->apps[i].name[p] &&
+                           cfg->apps[first_match].name[p] == cfg->apps[i].name[p])
+                        p++;
+                    if (p < common)
+                        common = p;
+                }
+            }
+        }
+        /* Fill buffer with common prefix */
+        if (common > tok_len && first_match >= 0) {
+            size_t prefix_len = tok - slash->buffer;
+            snprintf(slash->buffer + prefix_len, slash->line_size - prefix_len,
+                     "%.*s", (int)common, cfg->apps[first_match].name);
+            slash->length = prefix_len + common;
+            slash->cursor = slash->length;
+        }
+    }
+}
 
 /*
  * File utilities for computing size and checksum
@@ -87,105 +157,6 @@ static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
     return 0;
 }
 
-/**
- * Get satdeploy-agent node address by querying mng_satdeploy from app-sys-manager.
- *
- * @param appsys_node  CSP node of app-sys-manager (e.g., 5421)
- * @return agent node address, or 0 on error
- */
-static uint16_t get_agent_node_from_appsys(unsigned int appsys_node)
-{
-    int timeout = 2000;
-
-    /* Download param list from app-sys-manager */
-    int ret = param_list_download(appsys_node, timeout, 2, 0);
-    if (ret < 0) {
-        return 0;
-    }
-
-    /* Find mng_satdeploy param */
-    param_t *param = param_list_find_name(appsys_node, "mng_satdeploy");
-    if (!param) {
-        return 0;
-    }
-
-    /* Pull the actual value from remote */
-    ret = param_pull_single(param, -1, CSP_PRIO_NORM, 0, appsys_node, timeout, 2);
-    if (ret < 0) {
-        return 0;
-    }
-
-    return param_get_uint16(param);
-}
-
-/**
- * Restart an app via libparam on app-sys-manager.
- *
- * Reads the current param value, stops the app, then restores the original value.
- * If the app wasn't running (param=0), starts it with fallback_node.
- *
- * @param appsys_node   CSP node of app-sys-manager (e.g., 5421)
- * @param param_name    libparam name (e.g., "mng_dipp")
- * @param fallback_node Node address to use if app wasn't running (0 = don't start)
- * @return 0 on success, -1 on error
- */
-static int restart_app_via_libparam(unsigned int appsys_node, const char *param_name,
-                                     uint16_t fallback_node)
-{
-    int timeout = 2000;
-
-    if (fallback_node == 0) {
-        printf("No csp_node configured, skipping restart\n");
-        return 0;
-    }
-
-    /* Download param list from app-sys-manager */
-    int ret = param_list_download(appsys_node, timeout, 2, 0);
-    if (ret < 0) {
-        printf("Warning: Failed to download param list from node %u\n", appsys_node);
-        return -1;
-    }
-
-    /* Find the param by name - it was created by param_list_download with valid timestamp */
-    param_t *param = param_list_find_name(appsys_node, param_name);
-    if (!param) {
-        printf("Warning: Param '%s' not found on node %u\n", param_name, appsys_node);
-        return -1;
-    }
-
-    /* Stop the app */
-    uint16_t stop_val = 0;
-    char valuebuf[16] __attribute__((aligned(16)));
-    memcpy(valuebuf, &stop_val, sizeof(stop_val));
-
-    if (!param->timestamp) {
-        printf("Warning: param->timestamp is NULL\n");
-        return -1;
-    }
-    param->timestamp->tv_sec = 0;
-    ret = param_push_single(param, -1, CSP_PRIO_NORM, valuebuf, 0, appsys_node, timeout, 2, true);
-    if (ret < 0) {
-        printf("Warning: Failed to stop app\n");
-        /* Continue anyway */
-    } else {
-        printf("Stopped %s\n", param_name);
-    }
-
-    usleep(500000);  /* 500ms delay */
-
-    /* Start the app */
-    memcpy(valuebuf, &fallback_node, sizeof(fallback_node));
-    param->timestamp->tv_sec = 0;
-    ret = param_push_single(param, -1, CSP_PRIO_NORM, valuebuf, 0, appsys_node, timeout, 2, true);
-    if (ret < 0) {
-        printf("Warning: Failed to start app\n");
-        return -1;
-    }
-    printf("Started %s (node %u)\n", param_name, fallback_node);
-
-    return 0;
-}
-
 static int send_deploy_request(unsigned int node, Satdeploy__DeployRequest *req,
                                Satdeploy__DeployResponse **resp_out)
 {
@@ -235,11 +206,11 @@ static int satdeploy_status_cmd(struct slash *slash)
     }
     optparse_del(parser);
 
-    /* Get agent node from app-sys-manager if not specified */
+    /* Use agent_node from config if not specified via -n */
     if (node == 0) {
         satdeploy_config_t *config = satdeploy_config_load();
-        if (config && config->appsys_node > 0) {
-            node = get_agent_node_from_appsys(config->appsys_node);
+        if (config && config->agent_node > 0) {
+            node = config->agent_node;
         }
         if (node == 0) {
             node = slash_dfl_node;
@@ -299,7 +270,6 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     char *remote_path = NULL;
 
     int force = 0;
-    int no_restart = 0;
 
     /*
      * Reorder argv so positional args come after options.
@@ -338,7 +308,6 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     optparse_add_string(parser, 'f', "file", "PATH", &local_path, "Local binary path (overrides config)");
     optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path");
     optparse_add_set(parser, 'F', "force", 1, &force, "Force deploy even if same version");
-    optparse_add_set(parser, 'N', "no-restart", 1, &no_restart, "Skip app restart after deploy");
 
     int argi = optparse_parse(parser, total, reordered);
     if (argi < 0) {
@@ -358,15 +327,11 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     /* Load config for defaults */
     satdeploy_config_t *config = satdeploy_config_load();
 
-    /* Get agent node from app-sys-manager if not specified */
-    if (node == 0 && config && config->appsys_node > 0) {
-        node = get_agent_node_from_appsys(config->appsys_node);
-        if (node == 0) {
-            printf("Error: Could not get agent node from app-sys-manager (mng_satdeploy)\n");
-            printf("       Is satdeploy-agent running? Use -n to specify manually.\n");
-            return SLASH_EIO;
-        }
-    } else if (node == 0) {
+    /* Use agent_node from config if not specified via -n */
+    if (node == 0 && config && config->agent_node > 0) {
+        node = config->agent_node;
+    }
+    if (node == 0) {
         node = slash_dfl_node;
     }
 
@@ -543,20 +508,6 @@ static int satdeploy_deploy_cmd(struct slash *slash)
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
 
-    /* Restart app via libparam if configured */
-    if (!no_restart && app_config && app_config->param[0] && config->appsys_node > 0) {
-        printf("\nRestarting %s via libparam...\n", app_name);
-        int restart_ret = restart_app_via_libparam(config->appsys_node, app_config->param,
-                                                    (uint16_t)app_config->csp_node);
-        if (restart_ret < 0) {
-            printf("Warning: App restart failed, binary deployed but not restarted\n");
-        } else {
-            output_success("App started");
-        }
-    } else if (!no_restart && app_config && !app_config->param[0]) {
-        printf("Note: No 'param' configured for %s, skipping restart\n", app_name);
-    }
-
     return SLASH_SUCCESS;
 }
 
@@ -589,9 +540,9 @@ static int satdeploy_rollback_cmd(struct slash *slash)
     /* Load config for defaults */
     satdeploy_config_t *config = satdeploy_config_load();
 
-    /* Get agent node from app-sys-manager if not specified */
-    if (node == 0 && config && config->appsys_node > 0) {
-        node = get_agent_node_from_appsys(config->appsys_node);
+    /* Use agent_node from config if not specified via -n */
+    if (node == 0 && config && config->agent_node > 0) {
+        node = config->agent_node;
     }
     if (node == 0) {
         node = slash_dfl_node;
@@ -689,11 +640,11 @@ static int satdeploy_list_cmd(struct slash *slash)
     app_name = slash->argv[argi + 1];
     optparse_del(parser);
 
-    /* Get agent node from app-sys-manager if not specified */
+    /* Use agent_node from config if not specified via -n */
     if (node == 0) {
         satdeploy_config_t *config = satdeploy_config_load();
-        if (config && config->appsys_node > 0) {
-            node = get_agent_node_from_appsys(config->appsys_node);
+        if (config && config->agent_node > 0) {
+            node = config->agent_node;
         }
         if (node == 0) {
             node = slash_dfl_node;
@@ -772,9 +723,9 @@ static int satdeploy_logs_cmd(struct slash *slash)
     /* Load config for defaults */
     satdeploy_config_t *config = satdeploy_config_load();
 
-    /* Get agent node from app-sys-manager if not specified */
-    if (node == 0 && config && config->appsys_node > 0) {
-        node = get_agent_node_from_appsys(config->appsys_node);
+    /* Use agent_node from config if not specified via -n */
+    if (node == 0 && config && config->agent_node > 0) {
+        node = config->agent_node;
     }
     if (node == 0) {
         node = slash_dfl_node;
@@ -827,9 +778,7 @@ static int satdeploy_config_cmd(struct slash *slash)
         return SLASH_EIO;
     }
 
-    printf("\nDefaults:\n");
-    printf("  appsys_node: %u%s\n", config->appsys_node,
-           config->appsys_node == 0 ? " (restart disabled)" : "");
+    printf("\nAgent node: %u\n", config->agent_node);
 
     printf("\nApps: %d\n", config->num_apps);
     for (int i = 0; i < config->num_apps; i++) {
@@ -841,14 +790,140 @@ static int satdeploy_config_cmd(struct slash *slash)
         if (app->remote_path[0]) {
             printf("    remote:      %s\n", app->remote_path);
         }
-        if (app->param[0]) {
-            printf("    param:       %s\n", app->param);
-        }
     }
 
     if (config->num_apps == 0) {
         printf("  (none configured)\n");
     }
+
+    return SLASH_SUCCESS;
+}
+
+/*
+ * Interactive prompt helper: prints prompt, reads line, returns trimmed input.
+ * If user enters empty string, default_val is used (if non-NULL).
+ */
+static void prompt_string(const char *prompt, const char *default_val,
+                          char *out, size_t out_size)
+{
+    char buf[256];
+    if (default_val && default_val[0]) {
+        printf("  %s [%s]: ", prompt, default_val);
+    } else {
+        printf("  %s: ", prompt);
+    }
+    fflush(stdout);
+
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        out[0] = '\0';
+        return;
+    }
+
+    /* Strip trailing newline */
+    size_t len = strlen(buf);
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
+        buf[--len] = '\0';
+
+    if (len == 0 && default_val) {
+        strncpy(out, default_val, out_size - 1);
+        out[out_size - 1] = '\0';
+    } else {
+        strncpy(out, buf, out_size - 1);
+        out[out_size - 1] = '\0';
+    }
+}
+
+static int prompt_int(const char *prompt, int default_val)
+{
+    char buf[64];
+    char def_str[32];
+    snprintf(def_str, sizeof(def_str), "%d", default_val);
+    prompt_string(prompt, def_str, buf, sizeof(buf));
+    if (buf[0] == '\0')
+        return default_val;
+    return atoi(buf);
+}
+
+static int satdeploy_init_cmd(struct slash *slash)
+{
+    char config_path[MAX_PATH_LEN];
+    if (satdeploy_config_path(config_path, sizeof(config_path)) < 0) {
+        output_error("Could not determine config path");
+        return SLASH_EINVAL;
+    }
+
+    /* Release terminal from slash raw mode so fgets works normally */
+    slash_release_std_in_out(slash);
+
+    /* Check if config already exists */
+    FILE *check = fopen(config_path, "r");
+    if (check) {
+        fclose(check);
+        char confirm[16];
+        prompt_string("Config already exists. Overwrite? (y/N)", "N",
+                      confirm, sizeof(confirm));
+        if (confirm[0] != 'y' && confirm[0] != 'Y') {
+            printf("  Aborted.\n");
+            slash_acquire_std_in_out(slash);
+            return SLASH_SUCCESS;
+        }
+    }
+
+    printf(COLOR_BOLD "\n  Setting up satdeploy configuration...\n\n" COLOR_RESET);
+
+    char name[MAX_APP_NAME_LEN];
+    prompt_string("Target name", "default", name, sizeof(name));
+
+    /* CSP is the only transport in APM (SSH is Python CLI only) */
+    printf("  Transport: csp\n");
+
+    char zmq_endpoint[MAX_PATH_LEN];
+    prompt_string("ZMQ endpoint (zmqproxy host)", "tcp://localhost:9600",
+                  zmq_endpoint, sizeof(zmq_endpoint));
+
+    int agent_node = prompt_int("Agent CSP node", 5425);
+    int ground_node = prompt_int("Ground CSP node", 40);
+
+    /* Restore slash raw mode before any further output */
+    slash_acquire_std_in_out(slash);
+
+    /* Create config directory */
+    char dir_path[MAX_PATH_LEN];
+    const char *home = getenv("HOME");
+    if (!home) {
+        output_error("HOME not set");
+        return SLASH_EINVAL;
+    }
+    snprintf(dir_path, sizeof(dir_path), "%s/.satdeploy", home);
+    mkdir(dir_path, 0755);
+
+    /* Write YAML config */
+    FILE *f = fopen(config_path, "w");
+    if (!f) {
+        char msg[MAX_PATH_LEN + 32];
+        snprintf(msg, sizeof(msg), "Could not write to %s", config_path);
+        output_error(msg);
+        return SLASH_EINVAL;
+    }
+
+    fprintf(f, "name: %s\n", name);
+    fprintf(f, "transport: csp\n");
+    fprintf(f, "zmq_endpoint: %s\n", zmq_endpoint);
+    fprintf(f, "agent_node: %d\n", agent_node);
+    fprintf(f, "ground_node: %d\n", ground_node);
+    fprintf(f, "backup_dir: /opt/satdeploy/backups\n");
+    fprintf(f, "max_backups: 10\n");
+    fprintf(f, "apps: {}\n");
+
+    fclose(f);
+
+    /* Force config reload on next access */
+    satdeploy_config_reset();
+
+    printf("\n");
+    char msg[MAX_PATH_LEN + 32];
+    snprintf(msg, sizeof(msg), "Config saved to %s", config_path);
+    output_success(msg);
 
     return SLASH_SUCCESS;
 }
@@ -859,6 +934,7 @@ static int satdeploy_help_cmd(struct slash *slash)
     printf("  Deploy binaries to embedded Linux targets.\n\n");
     printf("Commands:\n");
     printf("  config    Show current configuration.\n");
+    printf("  init      Interactive setup, creates config.yaml.\n");
     printf("  list      List all versions of an app (deployed + backups).\n");
     printf("  logs      Show logs for an app's service.\n");
     printf("  push      Deploy one or more apps to a target.\n");
@@ -869,9 +945,10 @@ static int satdeploy_help_cmd(struct slash *slash)
 
 slash_command_group(satdeploy, "Satellite binary deployment");
 slash_command_sub(satdeploy, help, satdeploy_help_cmd, NULL, "Show this help message");
+slash_command_sub(satdeploy, init, satdeploy_init_cmd, "", "Interactive setup, creates config.yaml.");
 slash_command_sub(satdeploy, config, satdeploy_config_cmd, "", "Show current configuration.");
-slash_command_sub(satdeploy, push, satdeploy_deploy_cmd, "<app> [options]", "Deploy one or more apps to a target.");
-slash_command_sub(satdeploy, list, satdeploy_list_cmd, "<app>", "List all versions of an app (deployed + backups).");
-slash_command_sub(satdeploy, logs, satdeploy_logs_cmd, "<app> [-l lines]", "Show logs for an app's service.");
-slash_command_sub(satdeploy, rollback, satdeploy_rollback_cmd, "<app> [-H hash]", "Rollback to a previous version.");
+slash_command_sub_completer(satdeploy, push, satdeploy_deploy_cmd, app_name_completer, "<app> [options]", "Deploy one or more apps to a target.");
+slash_command_sub_completer(satdeploy, list, satdeploy_list_cmd, app_name_completer, "<app>", "List all versions of an app (deployed + backups).");
+slash_command_sub_completer(satdeploy, logs, satdeploy_logs_cmd, app_name_completer, "<app> [-l lines]", "Show logs for an app's service.");
+slash_command_sub_completer(satdeploy, rollback, satdeploy_rollback_cmd, app_name_completer, "<app> [-H hash]", "Rollback to a previous version.");
 slash_command_sub(satdeploy, status, satdeploy_status_cmd, NULL, "Show status of deployed apps and services.");
