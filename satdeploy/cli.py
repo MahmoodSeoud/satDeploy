@@ -632,9 +632,14 @@ def push(
             file_size = os.path.getsize(lp)
             local_hash = compute_file_hash(lp)
             size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024 * 1024 else f"{file_size / (1024 * 1024):.1f} MB"
+            provenance, prov_source = resolve_provenance(lp, manual_override=provenance_override)
             click.echo(f"  {SYMBOLS['arrow']} {app_name}")
             click.echo(f"    local:   {lp} ({size_str}, {local_hash})")
             click.echo(f"    remote:  {app_cfg.remote}")
+            if provenance:
+                click.echo(f"    provenance: {provenance} ({prov_source})")
+            else:
+                click.echo(f"    provenance: none (file not in a git repo)")
             if app_cfg.service:
                 services = get_services_to_manage(config, app_name, app_cfg.service)
                 svc_names = [s[1] for s in services]
