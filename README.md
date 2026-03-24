@@ -29,6 +29,7 @@ satdeploy list test_app         # See version history
 satdeploy rollback test_app     # Roll back to previous
 satdeploy logs test_app         # View service logs
 satdeploy demo shell            # Shell into the satellite
+satdeploy demo eject            # Generate config for your real target
 satdeploy demo stop             # Clean up
 ```
 
@@ -79,9 +80,20 @@ If your target has network access:
 
 ```bash
 satdeploy demo eject              # generates ~/.satdeploy/config.yaml (select "ssh")
-vim ~/.satdeploy/config.yaml      # set host, user, app paths
 satdeploy status                  # verify connection
 satdeploy push my-app             # deploy
+```
+
+Edit `~/.satdeploy/config.yaml` to match your target:
+
+```yaml
+host: 192.168.1.50               # your target's IP
+user: root                       # SSH user
+apps:
+  my-app:
+    local: ./build/my-app        # path to local binary
+    remote: /opt/bin/my-app      # where it goes on target
+    service: my-app.service      # systemd service to restart
 ```
 
 ### CSP (air-gapped targets, CAN bus)
@@ -115,8 +127,15 @@ For targets connected via CAN bus or serial (no network):
 
     ```bash
     satdeploy demo eject              # generates config (select "csp")
-    vim ~/.satdeploy/config.yaml      # set agent_node, ground_node, zmq_endpoint
     satdeploy status                  # verify connection
+    ```
+
+    Edit `~/.satdeploy/config.yaml` to match your setup:
+
+    ```yaml
+    zmq_endpoint: tcp://localhost:9600  # CSH's ZMQ address
+    agent_node: 5425                    # your satellite's CSP node ID
+    ground_node: 40                     # your ground station's CSP node ID
     ```
 
     The `zmq_endpoint` in your config points at [CSH](https://github.com/spaceinventor/csh), which bridges between ZMQ and CAN/serial:
