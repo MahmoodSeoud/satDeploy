@@ -92,15 +92,61 @@ For targets connected via CAN bus or serial (no network):
 
 2. Get the agent binary onto your target. This is the bootstrapping step — satdeploy handles all future OTA deploys, but the first install of the agent itself requires physical access (USB, JTAG, or flashing the Yocto image).
 
-3. Start the agent on the target.
+3. Start the agent on the target with the right interface flag:
+
+    ```bash
+    satdeploy-agent -i CAN -p can0           # CAN bus
+    satdeploy-agent -i KISS -p /dev/ttyS1    # Serial link
+    satdeploy-agent -i ZMQ -p localhost       # ZMQ (demo/local only)
+    ```
 
 4. Configure the ground station:
 
     ```bash
     satdeploy demo eject              # generates config (select "csp")
-    vim ~/.satdeploy/config.yaml      # set agent_node, ground_node, zmq ports
+    vim ~/.satdeploy/config.yaml      # set agent_node, ground_node, zmq_endpoint
     satdeploy status                  # verify connection
     ```
+
+    The `zmq_endpoint` in your config points at [CSH](https://github.com/spaceinventor/csh), which bridges between ZMQ and CAN/serial:
+
+    ```
+    Demo (ZMQ only):
+      Python CLI  -->  zmqproxy  -->  Agent (-i ZMQ)
+
+    Real satellite (CAN bus):
+      Python CLI  -->  CSH  -->  CAN bus  -->  Agent (-i CAN)
+
+    Serial link (KISS):
+      Python CLI  -->  CSH  -->  serial   -->  Agent (-i KISS)
+    ```
+
+    `zmqproxy` is a simple ZMQ forwarder (demo only). For real hardware with CAN or serial, you need CSH — a full [CSP](https://github.com/spaceinventor/libcsp) router that bridges between its ZMQ interface (where the Python CLI connects) and CAN or KISS interfaces (where the satellite lives).
+
+## Ground Station (CSH)
+
+If you use [CSH](https://github.com/spaceinventor/csh) as your ground station, satdeploy provides native slash commands via the APM module:
+
+```
+satdeploy status -n 5425       # Query agent status
+satdeploy push test_app        # Deploy an app
+satdeploy rollback test_app    # Rollback
+satdeploy list test_app        # List versions
+satdeploy logs test_app        # View logs
+```
+
+Build and install:
+
+```bash
+cd satdeploy-apm
+meson setup build
+ninja -C build
+cp build/libcsh_satdeploy_apm.so ~/.local/lib/csh/
+```
+
+Then in CSH: `apm load` to activate the satdeploy commands.
+
+CSH also acts as the CSP router for CAN and serial links — the Python CLI connects to CSH via ZMQ, and CSH routes to the satellite over CAN or KISS.
 
 ## Features
 
@@ -188,7 +234,7 @@ host: 192.168.1.50
 user: root
 ```
 
-**CSP** — CubeSat Space Protocol over ZMQ, CAN, or KISS serial. Requires `satdeploy-agent` on target.
+**CSP** — [CubeSat Space Protocol](https://github.com/spaceinventor/libcsp) over ZMQ, CAN, or KISS serial. Requires `satdeploy-agent` on target.
 
 ```yaml
 name: satellite
@@ -225,8 +271,8 @@ python -m pytest
 | Component | Language | Purpose |
 |-----------|----------|---------|
 | `satdeploy` | Python | Ground station CLI |
-| `satdeploy-agent` | C | Runs on ARM target, handles CSP deploy commands |
-| `satdeploy-apm` | C | CSH slash commands for ground station |
+| `satdeploy-agent` | C | Runs on ARM target, handles CSP deploy commands via [libcsp](https://github.com/spaceinventor/libcsp) |
+| `satdeploy-apm` | C | Slash commands for [CSH](https://github.com/spaceinventor/csh) ground station |
 
 ### Building satdeploy-agent
 
@@ -241,7 +287,7 @@ ninja -C build-arm
 
 ### Building satdeploy-apm
 
-Ground station CSH module:
+[CSH](https://github.com/spaceinventor/csh) ground station module (requires CSH headers):
 
 ```bash
 cd satdeploy-apm
@@ -256,6 +302,7 @@ cp build/libcsh_satdeploy_apm.so ~/.local/lib/csh/
 - Docker (for demo mode only)
 - SSH access to target (for SSH transport)
 - `satdeploy-agent` on target (for CSP transport)
+- [CSH](https://github.com/spaceinventor/csh) on ground station (for CAN/KISS transport — bridges ZMQ to physical bus)
 - systemd on target
 
 ## License
