@@ -1,4 +1,11 @@
-# satdeploy
+```
+███████╗ █████╗ ████████╗██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗
+██╔════╝██╔══██╗╚══██╔══╝██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝
+███████╗███████║   ██║   ██║  ██║█████╗  ██████╔╝██║     ██║   ██║ ╚████╔╝
+╚════██║██╔══██║   ██║   ██║  ██║██╔══╝  ██╔═══╝ ██║     ██║   ██║  ╚██╔╝
+██████╔╝██║  ██║   ██║   ██████╔╝███████╗██║     ███████╗╚██████╔╝   ██║
+╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝
+```
 
 OTA deployment for embedded Linux satellites. Push files over SSH or CSP, track versions, rollback with one command.
 
@@ -81,7 +88,9 @@ satdeploy push my-app             # deploy
 
 For targets connected via CAN bus or serial (no network):
 
-1. Build `satdeploy-agent` for your target (requires a Yocto/Poky cross-compile toolchain):
+1. Build `satdeploy-agent` for your target. The agent is a C program — compile it for your target's architecture using whatever cross-compile toolchain your project uses.
+
+    **Example: Yocto/Poky for ARM64**
 
     ```bash
     source /opt/poky/environment-setup-armv8a-poky-linux
@@ -89,6 +98,8 @@ For targets connected via CAN bus or serial (no network):
     meson setup build-arm --cross-file yocto_cross.ini
     ninja -C build-arm
     ```
+
+    For other toolchains, point meson at your own cross-compilation file and build normally.
 
 2. Get the agent binary onto your target. This is the bootstrapping step — satdeploy handles all future OTA deploys, but the first install of the agent itself requires physical access (USB, JTAG, or flashing the Yocto image).
 
@@ -268,15 +279,17 @@ python -m pytest
 
 ## Components
 
-| Component | Language | Purpose |
-|-----------|----------|---------|
-| `satdeploy` | Python | Ground station CLI |
-| `satdeploy-agent` | C | Runs on ARM target, handles CSP deploy commands via [libcsp](https://github.com/spaceinventor/libcsp) |
-| `satdeploy-apm` | C | Slash commands for [CSH](https://github.com/spaceinventor/csh) ground station |
+| Component | Language | Runs on | Purpose |
+|-----------|----------|---------|---------|
+| `satdeploy` | Python | Ground station | CLI — architecture-independent |
+| `satdeploy-agent` | C | Target | Handles CSP deploy commands via [libcsp](https://github.com/spaceinventor/libcsp) — must be cross-compiled for target architecture |
+| `satdeploy-apm` | C | Ground station | Slash commands for [CSH](https://github.com/spaceinventor/csh) — compiled natively |
 
 ### Building satdeploy-agent
 
-The agent runs on ARM targets. Cross-compile with Yocto:
+The agent is a C program that runs on the target. Compile it for your target's architecture using whatever cross-compile toolchain your project uses.
+
+**Example: Yocto/Poky for ARM64**
 
 ```bash
 source /opt/poky/environment-setup-armv8a-poky-linux
@@ -285,9 +298,11 @@ meson setup build-arm --cross-file yocto_cross.ini
 ninja -C build-arm
 ```
 
+For other toolchains, point meson at your own cross-compilation file and build normally.
+
 ### Building satdeploy-apm
 
-[CSH](https://github.com/spaceinventor/csh) ground station module (requires CSH headers):
+[CSH](https://github.com/spaceinventor/csh) ground station module. Compiled natively on the ground station (not cross-compiled):
 
 ```bash
 cd satdeploy-apm
