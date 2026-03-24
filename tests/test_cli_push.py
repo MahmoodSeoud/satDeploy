@@ -1148,6 +1148,88 @@ class TestPushProvenance:
         assert len(records) == 1
         assert records[0].git_hash is None
 
+    # Regression: ISSUE-001 — --require-clean silently passes when binary is outside git repo
+    # Found by /qa on 2026-03-24
+    @patch("satdeploy.cli.resolve_provenance", return_value=(None, "local"))
+    @patch("satdeploy.cli.get_transport")
+    def test_require_clean_rejects_when_no_provenance_and_cwd_dirty(
+        self, mock_get_transport, mock_provenance, tmp_path
+    ):
+        """--require-clean should check CWD git status when binary has no provenance."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        # Mock subprocess.run to simulate dirty CWD git status
+        with patch("subprocess.run") as mock_subprocess:
+            mock_subprocess.return_value = Mock(returncode=1)  # dirty
+
+            result = runner.invoke(
+                main,
+                ["push", "controller", "--require-clean", "--config", str(config_dir / "config.yaml")],
+            )
+
+        assert result.exit_code != 0
+        assert "dirty" in result.output.lower()
+        mock_get_transport.assert_not_called()
+
+    # Regression: ISSUE-001 — companion test for clean CWD
+    @patch("satdeploy.cli.resolve_provenance", return_value=(None, "local"))
+    @patch("satdeploy.cli.get_transport")
+    def test_require_clean_allows_when_no_provenance_and_cwd_clean(
+        self, mock_get_transport, mock_provenance, tmp_path
+    ):
+        """--require-clean should allow deploy when binary has no provenance but CWD is clean."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                make_config({
+                    "controller": {
+                        "local": str(binary),
+                        "remote": "/opt/disco/bin/controller",
+                        "service": "controller.service",
+                    }
+                })
+            )
+        )
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        # Mock subprocess.run to simulate clean CWD git status
+        with patch("subprocess.run") as mock_subprocess:
+            mock_subprocess.return_value = Mock(returncode=0)  # clean
+
+            result = runner.invoke(
+                main,
+                ["push", "controller", "--require-clean", "--config", str(config_dir / "config.yaml")],
+            )
+
+        assert result.exit_code == 0
+
 
 class TestAdhocPush:
     """Tests for ad-hoc push mode (--local + --remote without app name)."""
