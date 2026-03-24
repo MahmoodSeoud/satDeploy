@@ -100,20 +100,9 @@ apps:
 
 For targets connected via CAN bus or serial (no network):
 
-1. Build `satdeploy-agent` for your target. The agent is a C program — compile it for your target's architecture using whatever cross-compile toolchain your project uses.
+1. Build `satdeploy-agent` for your target — see [Building satdeploy-agent](#building-satdeploy-agent) for full instructions (Yocto recipe or manual cross-compile with all dependencies listed).
 
-    **Example: Yocto/Poky for ARM64**
-
-    ```bash
-    source /opt/poky/environment-setup-armv8a-poky-linux
-    cd satdeploy-agent
-    meson setup build-arm --cross-file yocto_cross.ini
-    ninja -C build-arm
-    ```
-
-    For other toolchains, point meson at your own cross-compilation file and build normally.
-
-2. Get the agent binary onto your target.
+2. Get the agent binary onto your target (skip this if you used the Yocto recipe — it's already in the image).
 
 3. Start the agent on the target with the right interface flag:
 
@@ -289,11 +278,17 @@ For libraries with a `restart` list, those services are restarted directly.
 For contributors or development:
 
 ```bash
-git clone https://github.com/MahmoodSeoud/satBuild.git
+git clone --recursive https://github.com/MahmoodSeoud/satBuild.git
 cd satBuild
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 python -m pytest
+```
+
+If you already cloned without `--recursive`, pull the submodules with:
+
+```bash
+git submodule update --init --recursive
 ```
 
 ## Components
@@ -306,15 +301,36 @@ python -m pytest
 
 ### Building satdeploy-agent
 
-The agent is a C program that runs on the target. Compile it for your target's architecture using whatever cross-compile toolchain your project uses.
+The agent runs on the target and is required for CSP transport. Two options:
 
-**Example: Yocto/Poky for ARM64**
+**Option A: Yocto recipe (recommended)** — add `meta-satdeploy` to your Yocto build:
+
+```
+bitbake-layers add-layer /path/to/meta-satdeploy
+# In local.conf:
+IMAGE_INSTALL:append = " satdeploy-agent"
+```
+
+See [`meta-satdeploy/`](meta-satdeploy/) for details.
+
+**Option B: Manual cross-compile**
+
+System dependencies (Ubuntu/Debian — your Yocto SDK sysroot may already have these):
+
+```bash
+sudo apt install build-essential pkg-config meson ninja-build \
+  libzmq3-dev libsocketcan-dev libyaml-dev libbsd-dev \
+  libprotobuf-c-dev libssl-dev
+```
+
+Build (assumes you cloned with `--recursive` — see [Install from Source](#install-from-source)):
 
 ```bash
 source /opt/poky/environment-setup-armv8a-poky-linux
 cd satdeploy-agent
 meson setup build-arm --cross-file yocto_cross.ini
 ninja -C build-arm
+# Output: build-arm/satdeploy-agent
 ```
 
 For other toolchains, point meson at your own cross-compilation file and build normally.
@@ -324,6 +340,10 @@ For other toolchains, point meson at your own cross-compilation file and build n
 [CSH](https://github.com/spaceinventor/csh) ground station module. Compiled natively on the ground station (not cross-compiled):
 
 ```bash
+# System dependencies (Ubuntu/Debian):
+sudo apt install libzmq3-dev libsocketcan-dev libyaml-dev libbsd-dev \
+  libprotobuf-c-dev libssl-dev libsqlite3-dev
+
 cd satdeploy-apm
 meson setup build
 ninja -C build
