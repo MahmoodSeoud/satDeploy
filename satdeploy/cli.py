@@ -657,11 +657,23 @@ def push(
         provenance, prov_source = resolve_provenance(local_path_prov, manual_override=provenance_override)
         provenance_map[app_name] = (provenance, prov_source)
 
-        # --require-clean only applies to local git provenance
-        if require_clean and prov_source == "local" and is_dirty(provenance):
-            raise SatDeployError(
-                "Refusing to deploy from dirty git tree. Commit your changes first."
-            )
+        # --require-clean: check provenance dirty flag, or fall back to CWD git status
+        if require_clean and prov_source == "local":
+            if is_dirty(provenance):
+                raise SatDeployError(
+                    "Refusing to deploy from dirty git tree. Commit your changes first."
+                )
+            if provenance is None:
+                # Binary is outside any git repo — check CWD instead
+                import subprocess
+                result = subprocess.run(
+                    ["git", "diff-index", "--quiet", "HEAD", "--"],
+                    capture_output=True, timeout=5,
+                )
+                if result.returncode != 0:
+                    raise SatDeployError(
+                        "Refusing to deploy from dirty git tree. Commit your changes first."
+                    )
 
         if prov_source == "local" and is_dirty(provenance):
             click.echo(warning(f"Deploying from uncommitted changes — file tagged as {provenance}"))
