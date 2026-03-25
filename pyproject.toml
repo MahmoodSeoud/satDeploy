@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "satdeploy"
-version = "0.1.2"
+version = "0.2.0"
 description = "Deployment tool for embedded Linux satellites — push, track, rollback over SSH and CSP"
 readme = "README.md"
 license = {text = "MIT"}
