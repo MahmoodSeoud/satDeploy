@@ -22,6 +22,7 @@
 #include <pthread.h>
 
 #include <csp/csp.h>
+#include <csp/csp_iflist.h>
 #include <apm/csh_api.h>
 #include <dtp/dtp.h>
 #include <dtp/dtp_file_payload.h>
@@ -409,7 +410,8 @@ static int deploy_single_app(unsigned int node, char *app_name,
     }
 
     /* Step 3: Send CMD_DEPLOY — agent will pull the file via DTP */
-    uint16_t ground_node = csp_conf.address;
+    csp_iface_t *default_iface = csp_iflist_get_by_isdfl(NULL);
+    uint16_t ground_node = default_iface ? default_iface->addr : 0;
 
     printf("Deploying via DTP (ground node %u, payload %u)...\n", ground_node, payload_id);
 
