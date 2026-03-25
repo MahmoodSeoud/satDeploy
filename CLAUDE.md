@@ -115,7 +115,7 @@ satdeploy config                    # Show current config
 satdeploy demo start                # Start simulated satellite (Docker)
 satdeploy demo stop                 # Stop simulator
 satdeploy demo shell                # Shell into the satellite (streams agent logs)
-satdeploy demo eject                # Generate config for real hardware
+satdeploy init                # Generate config for real hardware
 
 # Switch targets with --config
 satdeploy status --config ~/.satdeploy/som2/config.yaml

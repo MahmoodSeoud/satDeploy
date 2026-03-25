@@ -13,7 +13,7 @@ Deploying software to satellite hardware during development means USB drives, ad
 
 ## Try it now
 
-Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) (free for personal and education use).
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) running (free for personal and education use).
 
 ```bash
 pipx install satdeploy         # or: pip install satdeploy
@@ -29,7 +29,7 @@ satdeploy list test_app         # See version history
 satdeploy rollback test_app     # Roll back to previous
 satdeploy logs test_app         # View service logs
 satdeploy demo shell            # Shell into the satellite
-satdeploy demo eject            # Generate config for your real target
+satdeploy init            # Generate config for your real target
 satdeploy demo stop             # Clean up
 ```
 
@@ -72,87 +72,124 @@ $ satdeploy rollback controller
 
 ## Deploy to Real Hardware
 
-After trying the demo, transition to your actual target:
-
 ### SSH (networked targets)
 
-If your target has network access:
+Your target has network access. You don't need any C components — just the Python CLI.
+
+**1. Create a config:**
 
 ```bash
-satdeploy demo eject              # generates ~/.satdeploy/config.yaml (select "ssh")
-satdeploy status                  # verify connection
-satdeploy push my-app             # deploy
+satdeploy init                   # select "ssh", enter your target's IP
 ```
 
-Edit `~/.satdeploy/config.yaml` to match your target:
+**2. Edit `~/.satdeploy/config.yaml` for your target:**
 
 ```yaml
-host: 192.168.1.50               # your target's IP
-user: root                       # SSH user
+name: flatsat
+transport: ssh
+host: 192.168.1.50
+user: root
 apps:
-  my-app:
-    local: ./build/my-app        # path to local binary
-    remote: /opt/bin/my-app      # where it goes on target
-    service: my-app.service      # systemd service to restart
+  controller:
+    local: ./build/controller          # path to your local binary
+    remote: /opt/bin/controller        # where it goes on target
+    service: controller.service        # systemd service to restart (or null)
+```
+
+**3. Test with a real file:**
+
+```bash
+# Create a test file to deploy
+echo "hello satellite" > /tmp/test.txt
+
+# Deploy it ad-hoc (no config entry needed)
+satdeploy push -f /tmp/test.txt -r /tmp/test.txt
+
+# Check it landed
+satdeploy status
+
+# Or deploy a configured app
+satdeploy push controller
+```
+
+**4. See what happened:**
+
+```bash
+satdeploy list controller            # version history
+satdeploy rollback controller        # undo the deploy
+satdeploy logs controller            # service logs
 ```
 
 ### CSP (air-gapped targets, CAN bus)
 
-For targets connected via CAN bus or serial (no network):
+Your target is connected via CAN bus or serial — no network. You need three pieces:
 
-1. Build `satdeploy-agent` for your target — see [Building satdeploy-agent](#building-satdeploy-agent) for full instructions (Yocto recipe or manual cross-compile with all dependencies listed).
+| Piece | Where it runs | How to get it |
+|-------|---------------|---------------|
+| Python CLI or CSH APM | Ground station | `pip install satdeploy` or [build the APM](#building-satdeploy-apm) |
+| satdeploy-agent | Target satellite | [Yocto recipe or cross-compile](#building-satdeploy-agent) |
+| [CSH](https://github.com/spaceinventor/csh) | Ground station | Bridges ZMQ ↔ CAN/serial |
 
-2. Get the agent binary onto your target (skip this if you used the Yocto recipe — it's already in the image).
+**1. Start the agent on the target:**
 
-3. Start the agent on the target with the right interface flag:
+```bash
+satdeploy-agent -i CAN -p can0           # CAN bus
+satdeploy-agent -i KISS -p /dev/ttyS1    # Serial link
+satdeploy-agent -i ZMQ -p localhost       # ZMQ (local testing only)
+```
 
-    ```bash
-    satdeploy-agent -i CAN -p can0           # CAN bus
-    satdeploy-agent -i KISS -p /dev/ttyS1    # Serial link
-    satdeploy-agent -i ZMQ -p localhost       # ZMQ (demo/local only)
-    ```
+**2. Create a config on the ground station:**
 
-4. Configure the ground station:
+```bash
+satdeploy init                   # select "csp", enter your node IDs
+```
 
-    ```bash
-    satdeploy demo eject              # generates config (select "csp")
-    satdeploy status                  # verify connection
-    ```
+**3. Edit `~/.satdeploy/config.yaml`:**
 
-    Edit `~/.satdeploy/config.yaml` to match your setup:
+```yaml
+name: my-satellite
+transport: csp
+zmq_endpoint: tcp://localhost:9600       # CSH's ZMQ address
+agent_node: 55                           # your satellite's CSP node ID
+ground_node: 40                          # your ground station's CSP node ID
+apps:
+  controller:
+    local: ./build/controller
+    remote: /opt/bin/controller
+```
 
-    ```yaml
-    zmq_endpoint: tcp://localhost:9600  # CSH's ZMQ address
-    agent_node: 5425                    # your satellite's CSP node ID
-    ground_node: 40                     # your ground station's CSP node ID
-    ```
+**4. Test with a real file:**
 
-    The `zmq_endpoint` in your config points at [CSH](https://github.com/spaceinventor/csh), which bridges between ZMQ and CAN/serial:
+```bash
+# Ad-hoc deploy — no config entry needed
+echo "hello satellite" > /tmp/test.txt
+satdeploy push -f /tmp/test.txt -r /tmp/test.txt
 
-    ```
-    Demo (ZMQ only):
-      Python CLI  -->  zmqproxy  -->  Agent (-i ZMQ)
+# Check it arrived
+satdeploy status
 
-    Real satellite (CAN bus):
-      Python CLI  -->  CSH  -->  CAN bus  -->  Agent (-i CAN)
+# Deploy a configured app
+satdeploy push controller
+```
 
-    Serial link (KISS):
-      Python CLI  -->  CSH  -->  serial   -->  Agent (-i KISS)
-    ```
+**How the pieces connect:**
 
-    `zmqproxy` is a simple ZMQ forwarder (demo only). For real hardware with CAN or serial, you need CSH — a full [CSP](https://github.com/spaceinventor/libcsp) router that bridges between its ZMQ interface (where the Python CLI connects) and CAN or KISS interfaces (where the satellite lives).
+```
+Local testing (ZMQ):
+  Python CLI  -->  zmqproxy  -->  Agent (-i ZMQ)
+
+Real satellite (CAN bus):
+  Python CLI  -->  CSH  -->  CAN bus  -->  Agent (-i CAN)
+
+Serial link (KISS):
+  Python CLI  -->  CSH  -->  serial   -->  Agent (-i KISS)
+```
+
+`zmqproxy` is a simple ZMQ forwarder (demo/local only). For real hardware, you need [CSH](https://github.com/spaceinventor/csh) — it bridges between its ZMQ interface (where the CLI connects) and CAN or KISS interfaces (where the satellite lives).
 
 ## Ground Station (CSH)
 
-If you use [CSH](https://github.com/spaceinventor/csh) as your ground station, satdeploy provides native slash commands via the APM module:
-
-```
-satdeploy status -n 5425       # Query agent status
-satdeploy push test_app        # Deploy an app
-satdeploy rollback test_app    # Rollback
-satdeploy list test_app        # List versions
-satdeploy logs test_app        # View logs
-```
+If you use [CSH](https://github.com/spaceinventor/csh) as your ground station, satdeploy provides native slash commands via the APM module. The commands are **identical** to the Python CLI.
 
 Build and install:
 
@@ -164,6 +201,8 @@ cp build/libcsh_satdeploy_apm.so ~/.local/lib/csh/
 ```
 
 Then in CSH: `apm load` to activate the satdeploy commands.
+
+The APM also adds `-n/--node NUM` to each command for targeting a specific CSP node (defaults to `agent_node` from config).
 
 CSH also acts as the CSP router for CAN and serial links — the Python CLI connects to CSH via ZMQ, and CSH routes to the satellite over CAN or KISS.
 
@@ -178,24 +217,88 @@ CSH also acts as the CSP router for CAN and serial links — the Python CLI conn
 
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `satdeploy push <app>` | Deploy file |
-| `satdeploy push <app> --local ./path` | Deploy with path override |
-| `satdeploy push --all` | Deploy all apps |
-| `satdeploy push --require-clean` | Refuse to deploy from dirty git tree |
-| `satdeploy status` | Show app statuses with git provenance |
-| `satdeploy list <app>` | List all versions |
-| `satdeploy rollback <app>` | Restore previous version |
-| `satdeploy rollback <app> <hash>` | Restore specific version |
-| `satdeploy logs <app>` | Show service logs |
-| `satdeploy config` | Show configuration |
-| `satdeploy demo start` | Start simulated satellite (Docker) |
-| `satdeploy demo stop` | Stop simulator |
-| `satdeploy demo shell` | Shell into the satellite (streams agent logs) |
-| `satdeploy demo eject` | Generate config for real hardware |
+The Python CLI and CSH APM share the same command interface. Every flag works in both.
 
-All commands accept `--config` to select which target config to use (e.g. `--config ~/.satdeploy/som2/config.yaml`).
+### push — Deploy files to target
+
+```
+satdeploy push <app>                         # Deploy app from config
+satdeploy push <app1> <app2>                 # Deploy multiple apps
+satdeploy push -a / --all                    # Deploy all apps from config
+satdeploy push -f PATH -r PATH              # Ad-hoc deploy (no config entry needed)
+```
+
+| Flag | Description |
+|------|-------------|
+| `-f, --local PATH` | Local file path (overrides config) |
+| `-r, --remote PATH` | Remote path on target |
+| `-F, --force` | Force deploy even if same version |
+| `-a, --all` | Deploy all apps from config |
+
+### status — Show deployed apps
+
+```
+satdeploy status
+```
+
+### list — Show version history
+
+```
+satdeploy list <app>
+```
+
+### rollback — Restore a previous version
+
+```
+satdeploy rollback <app>                     # Roll back to previous version
+satdeploy rollback <app> -H HASH             # Roll back to specific version
+```
+
+| Flag | Description |
+|------|-------------|
+| `-H, --hash HASH` | Specific backup hash to restore |
+
+### logs — View service logs
+
+```
+satdeploy logs <app>
+satdeploy logs <app> -l 50                   # Show last 50 lines
+```
+
+| Flag | Description |
+|------|-------------|
+| `-l, --lines NUM` | Number of lines to show (default: 100) |
+
+### config — Show current configuration
+
+```
+satdeploy config
+```
+
+### demo — Simulated satellite (Python CLI only)
+
+```
+satdeploy demo start          # Start simulated satellite (Docker)
+satdeploy demo stop           # Stop simulator
+satdeploy demo shell          # Shell into the satellite
+```
+
+### Shell completion
+
+```bash
+# Bash — add to ~/.bashrc
+eval "$(_SATDEPLOY_COMPLETE=bash_source satdeploy)"
+
+# Zsh — add to ~/.zshrc
+eval "$(_SATDEPLOY_COMPLETE=zsh_source satdeploy)"
+```
+
+All commands also accept:
+
+| Flag | Description |
+|------|-------------|
+| `-n, --node NUM` | Target CSP node (overrides `agent_node` from config) |
+| `--config PATH` | Config file (default: `~/.satdeploy/config.yaml`) |
 
 ## Configuration
 
