@@ -95,7 +95,7 @@ TUTORIAL_TEXT = """\
   {line} When you're done {line5}
 
     satdeploy demo stop               Stop the simulator
-    satdeploy demo eject              Generate config for real hardware
+    satdeploy init                    Generate config for real hardware
 """
 
 
@@ -553,7 +553,7 @@ def demo_shell() -> None:
     try:
         subprocess.run(
             ["docker", "compose", "-f", str(compose_file),
-             "exec", "agent", "/bin/bash"],
+             "exec", "agent", "/bin/sh"],
         )
     except KeyboardInterrupt:
         click.echo("\nShell closed.")

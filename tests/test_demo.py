@@ -172,13 +172,13 @@ class TestWaitForAgent:
 class TestDemoStart:
     def test_start_already_running(self, tmp_path, capsys):
         """When demo is already running, just re-print the tutorial."""
+        fake_config = tmp_path / "config.yaml"
+        fake_config.write_text("name: demo")
+        (tmp_path / "dc.yml").write_text("services: {}")
         with patch("satdeploy.demo._check_docker"):
             with patch("satdeploy.demo._get_compose_file", return_value=tmp_path / "dc.yml"):
                 with patch("satdeploy.demo._is_agent_container_running", return_value=True):
-                    # Create fake config to indicate demo is set up
-                    with patch("satdeploy.demo.DEMO_DIR", tmp_path):
-                        (tmp_path / "config.yaml").write_text("name: demo")
-                        (tmp_path / "dc.yml").write_text("services: {}")
+                    with patch("satdeploy.demo.DEMO_CONFIG_PATH", fake_config):
                         demo_start()
                         output = capsys.readouterr().out
                         assert "already running" in output.lower()
@@ -291,7 +291,6 @@ class TestDemoCLI:
         assert "stop" in result.output
         assert "status" in result.output
         assert "shell" in result.output
-        assert "eject" in result.output
 
     def test_demo_start_invokes_module(self):
         runner = CliRunner()
