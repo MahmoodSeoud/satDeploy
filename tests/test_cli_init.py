@@ -96,7 +96,7 @@ class TestInitCommand:
 
         assert config["backup_dir"] == "/opt/satdeploy/backups"
         assert config["max_backups"] == 10
-        assert config["apps"] == {}
+        assert "my_app" in config["apps"]
 
     def test_init_csp_transport(self, tmp_path):
         """Init should support CSP transport configuration."""

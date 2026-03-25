@@ -27,7 +27,6 @@ from satdeploy.demo import (
     demo_start,
     demo_stop,
     demo_status,
-    demo_eject,
 )
 from satdeploy.output import SatDeployError
 from satdeploy.transport.base import TransportError
@@ -230,46 +229,6 @@ class TestDemoStatus:
                 demo_status()
                 output = capsys.readouterr().out
                 assert "not running" in output.lower()
-
-
-class TestDemoEject:
-    def test_eject_csp(self, tmp_path):
-        target_dir = tmp_path / ".satdeploy"
-
-        with patch("satdeploy.demo.click.prompt", return_value="csp"):
-            with patch("satdeploy.demo.Path.home", return_value=tmp_path):
-                demo_eject()
-                config_path = target_dir / "config.yaml"
-                assert config_path.exists()
-                data = yaml.safe_load(config_path.read_text())
-                assert data["transport"] == "csp"
-                assert data["agent_node"] == 5425
-
-    def test_eject_ssh(self, tmp_path):
-        target_dir = tmp_path / ".satdeploy"
-
-        with patch("satdeploy.demo.click.prompt", return_value="ssh"):
-            with patch("satdeploy.demo.Path.home", return_value=tmp_path):
-                demo_eject()
-                config_path = target_dir / "config.yaml"
-                assert config_path.exists()
-                data = yaml.safe_load(config_path.read_text())
-                assert data["transport"] == "ssh"
-                assert "host" in data
-
-    def test_eject_existing_config_abort(self, tmp_path):
-        target_dir = tmp_path / ".satdeploy"
-        target_dir.mkdir()
-        (target_dir / "config.yaml").write_text("existing: true")
-
-        with patch("satdeploy.demo.click.prompt", return_value="csp"):
-            with patch("satdeploy.demo.click.confirm", return_value=False):
-                with patch("satdeploy.demo.Path.home", return_value=tmp_path):
-                    demo_eject()
-                    data = yaml.safe_load(
-                        (target_dir / "config.yaml").read_text()
-                    )
-                    assert data == {"existing": True}
 
 
 class TestConfigDirEnvvar:
