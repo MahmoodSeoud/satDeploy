@@ -150,19 +150,15 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         return -1;
     }
 
-    /* Debug: dump request_meta before sending */
+    /* Debug: verify params passed to session */
     {
-        uint8_t *raw = (uint8_t *)&session->request_meta;
-        printf("[dtp-debug] request_meta (first 16 bytes):");
-        for (int i = 0; i < 16 && i < (int)sizeof(session->request_meta); i++)
-            printf(" %02x", raw[i]);
-        printf("\n");
-        printf("[dtp-debug] throughput=%u nof_intervals=%u payload_id=%u mtu=%u session_id=%u\n",
-               session->request_meta.throughput,
-               session->request_meta.nof_intervals,
-               session->request_meta.payload_id,
-               session->request_meta.mtu,
-               session->request_meta.session_id);
+        dtp_params check;
+        dtp_get_opt(session, DTP_PAYLOAD_ID_CFG, &check);
+        printf("[dtp-debug] payload_id=%u (expected %u)\n", check.payload_id.value, payload_id);
+        dtp_get_opt(session, DTP_MTU_CFG, &check);
+        printf("[dtp-debug] mtu=%u\n", check.mtu.value);
+        dtp_get_opt(session, DTP_THROUGHPUT_CFG, &check);
+        printf("[dtp-debug] throughput=%u\n", check.throughput.value);
         fflush(stdout);
     }
 
