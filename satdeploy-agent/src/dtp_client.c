@@ -150,6 +150,22 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         return -1;
     }
 
+    /* Debug: dump request_meta before sending */
+    {
+        uint8_t *raw = (uint8_t *)&session->request_meta;
+        printf("[dtp-debug] request_meta (first 16 bytes):");
+        for (int i = 0; i < 16 && i < (int)sizeof(session->request_meta); i++)
+            printf(" %02x", raw[i]);
+        printf("\n");
+        printf("[dtp-debug] throughput=%u nof_intervals=%u payload_id=%u mtu=%u session_id=%u\n",
+               session->request_meta.throughput,
+               session->request_meta.nof_intervals,
+               session->request_meta.payload_id,
+               session->request_meta.mtu,
+               session->request_meta.session_id);
+        fflush(stdout);
+    }
+
     /* Set user context and hooks BEFORE starting the transfer */
     dtp_session_set_user_ctx(session, &ctx);
 

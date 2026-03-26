@@ -332,7 +332,12 @@ static void *dtp_server_thread(void *arg) {
             continue;
         }
 
-        printf("[dtp-server] Got metadata request from node %d\n", csp_conn_src(conn));
+        printf("[dtp-server] Got metadata request from node %d, len=%u\n",
+               csp_conn_src(conn), packet->length);
+        printf("[dtp-server] raw packet data (first 16 bytes):");
+        for (int i = 0; i < 16 && i < packet->length; i++)
+            printf(" %02x", packet->data[i]);
+        printf("\n");
         fflush(stdout);
 
         packet = setup_server_transfer(&server_transfer_ctx, csp_conn_src(conn), packet);
