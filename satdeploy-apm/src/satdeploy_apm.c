@@ -26,6 +26,7 @@
 #include <apm/csh_api.h>
 #include <dtp/dtp.h>
 #include <dtp/dtp_file_payload.h>
+#include <dtp/dtp_protocol.h>
 #include "deploy.pb-c.h"
 #include "config.h"
 #include "history.h"
