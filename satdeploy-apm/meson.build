@@ -35,5 +35,6 @@ satdeploy_apm = shared_library(
     ],
     include_directories: includes,
     dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, sqlite3_dep, dtp_dep],
+    link_args: ['-Wl,-Bsymbolic'],
     install: true
 )
