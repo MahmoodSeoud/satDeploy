@@ -32,6 +32,13 @@ The `build/` directory is for x86 native testing only - never deploy it.
 
 ### satdeploy-apm (Ground station)
 
+**CRITICAL:** The CSP submodule (`lib/csp`) must match CSH's CSP version. The APM
+is dlopen'd into CSH's process and shares `csp_packet_t` structs — a version
+mismatch causes wrong field offsets and silent data corruption. Sync with:
+```bash
+cd satdeploy-apm/lib/csp && git checkout $(cd /path/to/csh/lib/csp && git rev-parse HEAD)
+```
+
 ```bash
 cd satdeploy-apm
 meson setup build --wipe
