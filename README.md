@@ -53,37 +53,41 @@ Docker is only used for the demo simulator. Real deployments use SSH or CSP dire
 
 ## Example Session
 
+The output below is the real `satdeploy demo` flow — what you'll see after `satdeploy demo start` on your own machine.
+
 ```
-$ satdeploy push controller
-[1/4] Stopping controller.service
-[2/4] Backing up /opt/disco/bin/controller
-[3/4] Uploading ./build/controller
-[4/4] Starting controller.service
-> Deployed controller (e5f6a7b9) main@3c940acf
+$ satdeploy status
+Target: node 5425
+
+    APP              STATUS        HASH       PATH
+    ------------------------------------------------------------
+  • test_app        deployed      32c0702b   /opt/demo/bin/test_app
+
+$ satdeploy push test_app
+Connecting to tcp://localhost:9600...
+Deploying test_app via CSP (62 bytes)...
+  Uploading test_app: ████████████████████ 100% (62/62 bytes)
+▸ Deployed test_app (5f3413a2)
 
 $ satdeploy status
-Target: som1 (192.168.1.50)
+Target: node 5425
 
-    APP              STATUS        HASH       SOURCE           TIMESTAMP
-    --------------------------------------------------------------------------
-  > controller      running       e5f6a7b9  main@3c940acf    2024-01-15 14:35
-  > csp_server      running       b7e1d2a4  main@ddfa081f    2024-01-15 09:15
-  - libparam        deployed      c4d5e6f1  main@9c622a2b    2024-01-12 16:23
+    APP              STATUS        HASH       PATH
+    ------------------------------------------------------------
+  • test_app        deployed      5f3413a2   /opt/demo/bin/test_app
 
-$ satdeploy list controller
-Versions for controller:
+$ satdeploy list test_app
+Versions for test_app:
 
-    HASH       SOURCE           TIMESTAMP            STATUS
-    ---------------------------------------------------------------
-  > e5f6a7b9  main@3c940acf    2024-01-15 14:35:10  deployed
-  - a3f2c9b8  main@ddfa081f    2024-01-15 14:30:22  backup
-  - d2c3b4a5  feat@17ad579b    2024-01-14 09:15:00  backup
+    HASH       TIMESTAMP            STATUS
+    ---------------------------------------------
+  • 32c0702b  2026-04-13T17:26:16  backup
+  → 5f3413a2  2026-04-13T17:26:16  deployed
 
-$ satdeploy rollback controller
-[1/3] Stopping controller.service
-[2/3] Restoring a3f2c9b8
-[3/3] Starting controller.service
-> Rolled back controller to a3f2c9b8
+$ satdeploy rollback test_app
+Connecting to tcp://localhost:9600...
+Rolling back test_app via CSP...
+▸ Rolled back test_app to 32c0702b
 ```
 
 ## Deploy to Real Hardware
