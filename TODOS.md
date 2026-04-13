@@ -153,3 +153,24 @@ positional args so `satdeploy deploy test_app -f /tmp/binary` and
 **Fix:** Increased `MAX_PATH_LEN` from 256 to 512. Backup paths like
 `/opt/satdeploy/backups/<app>/YYYYMMDD-HHMMSS-<hash>.bak` could approach
 256 bytes with long app names or deep backup directories.
+
+## Compliance Audit Command (`satdeploy audit`)
+
+**What:** Export deployment history as a formatted report (markdown or PDF) for compliance documentation.
+
+**Why:** Launch providers and insurers may require configuration management documentation
+as commercial small-sat grows. A `satdeploy audit` command that auto-generates deployment
+history reports from history.db would give funded startups a reason to adopt beyond "nice
+dev tool." Identified during CEO review (2026-04-13) but deferred until a customer
+explicitly asks for compliance docs.
+
+**Context:** Formats existing history.db data. No new data collection needed. Output
+should include: deployment timeline, per-app version history, hash verification status,
+and any rollback events. Consider PDF output via weasyprint or markdown for simplicity.
+
+**Effort:** S (human: ~1 day / CC: ~30 min)
+
+**Priority:** P3 -- build only after validated external demand
+
+**Depends on:** Phase 1 community launch validation. Only build if a funded startup
+specifically asks for compliance/audit documentation.
