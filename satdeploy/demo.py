@@ -19,8 +19,10 @@ from satdeploy.transport.csp import CSPTransport
 from satdeploy.transport.base import TransportError
 
 
-DEMO_CONFIG_PATH = Path.home() / ".satdeploy" / "demo" / "config.yaml"
 DEMO_DIR = Path.home() / ".satdeploy" / "demo"
+DEFAULT_CONFIG_PATH = Path.home() / ".satdeploy" / "config.yaml"
+DEMO_CONFIG_PATH = DEFAULT_CONFIG_PATH  # Demo writes to default so `satdeploy status` just works
+SAVED_CONFIG_PATH = DEMO_DIR / "saved-config.yaml"  # Backup of user's real config
 GHCR_IMAGE = "ghcr.io/mahmoodseoud/satdeploy-sim:latest"
 
 # Demo satellite configuration — matches agent defaults
@@ -76,10 +78,11 @@ TUTORIAL_TEXT = """\
 
   {line} Try these commands {line2}
 
-    satdeploy --config {cfg} status                  See what's deployed
-    satdeploy --config {cfg} push test_app           Deploy a new version
-    satdeploy --config {cfg} list test_app           See version history
-    satdeploy --config {cfg} rollback test_app       Roll back to previous
+    satdeploy status                  See what's deployed
+    satdeploy push test_app           Deploy a new version
+    satdeploy list test_app           See version history
+    satdeploy rollback test_app       Roll back to previous
+    satdeploy logs test_app           View service logs
 
   {line} Explore the satellite {line3}
 
@@ -200,8 +203,24 @@ def _ensure_agent_dirs(compose_file: Path) -> None:
 
 
 def _write_demo_config() -> None:
-    """Write the demo config YAML."""
+    """Write the demo config to the default config path.
+
+    If the user already has a real config, back it up first so
+    demo stop can restore it.
+    """
+    DEMO_DIR.mkdir(parents=True, exist_ok=True)
     DEMO_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # Back up existing config (if it's not already a demo config)
+    if DEMO_CONFIG_PATH.exists():
+        try:
+            with open(DEMO_CONFIG_PATH) as f:
+                existing = yaml.safe_load(f)
+            if existing and existing.get("name") != "demo-satellite":
+                shutil.copy2(DEMO_CONFIG_PATH, SAVED_CONFIG_PATH)
+        except (yaml.YAMLError, OSError):
+            pass
+
     with open(DEMO_CONFIG_PATH, "w") as f:
         yaml.dump(DEMO_CONFIG, f, default_flow_style=False)
 
@@ -210,8 +229,9 @@ def _reset_demo_history() -> None:
     """Remove the demo history database so every demo start is a clean slate.
 
     Users should never see stale deployments from a previous demo session.
+    The history db sits next to the config file (derived from config path).
     """
-    history_db = DEMO_DIR / "history.db"
+    history_db = DEMO_CONFIG_PATH.parent / "history.db"
     if history_db.exists():
         history_db.unlink()
 
@@ -272,9 +292,7 @@ def _wait_for_agent(max_attempts: int = 15, interval: float = 2.0) -> bool:
 def _print_tutorial() -> None:
     """Print the guided tutorial output."""
     line = "\u2500" * 3
-    cfg = str(DEMO_CONFIG_PATH)
     click.echo(TUTORIAL_TEXT.format(
-        cfg=cfg,
         line=line,
         line2="\u2500" * 33,
         line3="\u2500" * 30,
@@ -446,19 +464,20 @@ def demo_stop(clean: bool = False) -> None:
         click.echo("Demo environment is not running.")
 
     # Always remove demo history so next start is a clean slate
-    history_db = DEMO_DIR / "history.db"
-    if history_db.exists():
-        history_db.unlink()
+    _reset_demo_history()
+
+    # Restore user's real config if we backed one up
+    if SAVED_CONFIG_PATH.exists():
+        shutil.move(str(SAVED_CONFIG_PATH), str(DEMO_CONFIG_PATH))
+        click.echo(success("Restored your previous config"))
+    elif DEMO_CONFIG_PATH.exists():
+        DEMO_CONFIG_PATH.unlink()
+        click.echo(success("Demo config removed"))
 
     if clean:
-        # DEMO_CONFIG_PATH is inside DEMO_DIR, so removing DEMO_DIR cleans both
         if DEMO_DIR.exists():
             shutil.rmtree(DEMO_DIR)
         click.echo(success("Removed demo files"))
-    elif DEMO_CONFIG_PATH.exists():
-        # Always clean up demo config so next `demo start` re-initializes
-        DEMO_CONFIG_PATH.unlink()
-        click.echo(success("Demo config removed"))
 
 
 def demo_status() -> None:
