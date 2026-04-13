@@ -1,3 +1,8 @@
+**Know exactly what software is running on your satellite.** Push files, track versions, rollback with one command. Works over SSH and CSP (CubeSat Space Protocol).
+
+<details>
+<summary><code>satdeploy</code></summary>
+
 ```
 ███████╗ █████╗ ████████╗██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗
 ██╔════╝██╔══██╗╚══██╔══╝██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝
@@ -7,13 +12,13 @@
 ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝
 ```
 
-**Know exactly what software is running on your satellite.** Push files, track versions, rollback with one command. Works over SSH and CSP (CubeSat Space Protocol).
+</details>
 
 We shipped a CubeSat without being 100% sure what software was on it. After launch, we spent weeks trying to recreate the state on our flatsat. USB drives, ad-hoc SCP scripts, Slack messages saying "I updated the binary" ... after dozens of incremental updates, nobody could say exactly what was running on the hardware.
 
 So we built satdeploy. Every deploy is versioned, hash-verified, and recorded. Every file can be rolled back with one command. It works over SSH for networked targets and over CSP for air-gapped satellite links (CAN bus, serial).
 
-> **Early stage.** satdeploy works on our hardware. We're looking for other satellite teams to try it and tell us what's missing. [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues) or reach out.
+> **Early stage.** satdeploy works on our hardware. We're looking for other satellite teams to try it. Does this fit your deployment workflow? What's missing? What's confusing? [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues) or reach out.
 
 ## What it does
 
@@ -41,7 +46,6 @@ satdeploy list test_app         # See version history
 satdeploy rollback test_app     # Roll back to previous
 satdeploy logs test_app         # View service logs
 satdeploy demo shell            # Shell into the satellite
-satdeploy init            # Generate config for your real target
 satdeploy demo stop             # Clean up
 ```
 
@@ -108,20 +112,11 @@ apps:
     service: controller.service        # systemd service to restart (or null)
 ```
 
-**3. Test with a real file:**
+**3. Deploy:**
 
 ```bash
-# Create a test file to deploy
-echo "hello satellite" > /tmp/test.txt
-
-# Deploy it ad-hoc (no config entry needed)
-satdeploy push -f /tmp/test.txt -r /tmp/test.txt
-
-# Check it landed
-satdeploy status
-
-# Or deploy a configured app
 satdeploy push controller
+satdeploy status
 ```
 
 **4. See what happened:**
@@ -170,18 +165,11 @@ apps:
     remote: /opt/bin/controller
 ```
 
-**4. Test with a real file:**
+**4. Deploy:**
 
 ```bash
-# Ad-hoc deploy — no config entry needed
-echo "hello satellite" > /tmp/test.txt
-satdeploy push -f /tmp/test.txt -r /tmp/test.txt
-
-# Check it arrived
-satdeploy status
-
-# Deploy a configured app
 satdeploy push controller
+satdeploy status
 ```
 
 **How the pieces connect:**
@@ -246,6 +234,7 @@ satdeploy push -f PATH -r PATH              # Ad-hoc deploy (no config entry nee
 | `-r, --remote PATH` | Remote path on target |
 | `-F, --force` | Force deploy even if same version |
 | `-a, --all` | Deploy all apps from config |
+| `--require-clean` | Refuse to deploy from a dirty git tree |
 
 ### status — Show deployed apps
 
