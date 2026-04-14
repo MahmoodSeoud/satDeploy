@@ -709,11 +709,11 @@ def push(
         if prov_source == "local" and is_dirty(provenance):
             if require_clean:
                 raise SatDeployError(
-                    f"Refusing to deploy {app_name} — working tree is dirty "
+                    f"Refusing to deploy {app_name}, working tree is dirty "
                     f"(tagged {provenance}). Commit or stash your changes, "
                     f"or drop --require-clean."
                 )
-            click.echo(warning(f"Deploying from uncommitted changes — file tagged as {provenance}"))
+            click.echo(warning(f"Deploying from uncommitted changes. File tagged as {provenance}"))
 
     history = get_history(config.history_path)
 
@@ -799,7 +799,7 @@ def push(
                     if result.skipped:
                         click.echo(render_push_step(PushStep(
                             label="unchanged",
-                            detail=f"already deployed at {local_hash[:8]} — use --force to redeploy",
+                            detail=f"already deployed at {local_hash[:8]}, use --force to redeploy",
                             skipped=True,
                         )))
                     elif result.restored:
@@ -810,7 +810,7 @@ def push(
                     else:
                         backup_detail = (
                             os.path.basename(result.backup_path)
-                            if result.backup_path else dim("no prior version — skipped")
+                            if result.backup_path else dim("no prior version, skipped")
                         )
                         click.echo(render_push_step(PushStep(
                             label="backup", detail=str(backup_detail),
@@ -846,7 +846,7 @@ def push(
                             )))
                     else:
                         click.echo(render_push_step(PushStep(
-                            label="service", detail="no service configured — skipped",
+                            label="service", detail="no service configured, skipped",
                             skipped=True,
                         )))
 

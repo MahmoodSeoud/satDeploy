@@ -7,7 +7,7 @@
   ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝
 ```
 
-We shipped [DISCO-2](https://discosat.dk/v2_disco-2/) and had trouble replicating what it was running on a test flatsat.
+We flew [DISCO-2](https://discosat.dk/v2_disco-2/), a 3U student CubeSat, and then spent weeks trying to recreate what was on it.
 
 
 Months of incremental updates over USB drives, ad-hoc SCP scripts, and Slack messages saying "I updated the binary." By launch, nobody could point at the hardware and say which commit was on it. After launch, we spent weeks trying to recreate the state on our flatsat from memory and old tmux sessions.
@@ -16,7 +16,7 @@ satdeploy is what we built so it doesn't happen again. Every deploy is versioned
 
 > DISCO-2 is a 3U student CubeSat from Aarhus University, SDU, and ITU Copenhagen, launched on SpaceX Transporter-16 (March 30, 2026) to image Arctic glaciers from a 510 km sun-synchronous orbit. Coverage: [Danish Space News](https://danishspacenews.substack.com/p/disco-2-one-of-the-most-ambitious), [The Danish Dream](https://thedanishdream.com/danish-society/science/danish-students-launch-satellite-to-track-melting-arctic/), [project site](https://projects.au.dk/ausat/disco-2).
 
-> **Early stage — but heading to orbit.** We built satdeploy *after* DISCO-2 launched, so the current payload is flying without it. The next uplink window will push satdeploy to the DISCO-2 payload, and every deploy after that will be versioned, hash-verified, and rollback-able from the ground. Until then it runs on our flatsat and we're looking for other satellite teams to try it before we trust it in orbit ourselves. Does this fit your workflow? What's missing? [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues) or reach out.
+> **Early stage, but heading to orbit.** We built satdeploy *after* DISCO-2 launched, so the current payload is flying without it. The next uplink window will push satdeploy to the DISCO-2 payload, and every deploy after that will be versioned, hash-verified, and rollback-able from the ground. Until then it runs on our flatsat, and we're looking for other satellite teams to try it before we trust it in orbit ourselves. Does this fit your workflow? What's missing? [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues) or reach out.
 
 ## Try it now
 
@@ -32,7 +32,7 @@ satdeploy demo
 ```bash
 satdeploy status              # See what's deployed
 satdeploy push test_app       # Deploy v2 (new hash, new commit)
-satdeploy rollback test_app   # Undo — one command, git tag carries through
+satdeploy rollback test_app   # Undo in one command, git tag carries through
 satdeploy demo stop           # Tear it down when you're done
 ```
 
@@ -56,7 +56,7 @@ $ satdeploy push test_app
   ✓  backup      20260414-124916-32c0702b.bak
   ✓  upload      0.1 KB · sha256 5f3413a2
   ✓  verify      checksum ok
-  ·  service     no service configured — skipped
+  ·  service     no service configured, skipped
 
   Deployed in 0.03s.  Rollback with: satdeploy rollback test_app
 
@@ -85,13 +85,13 @@ $ satdeploy status
 
 The thing to notice: every line shows both a file hash *and* the git commit it came from, and that link survives rollback. "What's live right now" is always a real commit SHA you can `git show`. That's the whole pitch.
 
-The demo uses the same `LocalTransport`, history database, backup semantics, and rollback logic as a real deployment — every hash and git commit is real. When you're ready for hardware, run `satdeploy init`.
+The demo uses the same `LocalTransport`, history database, backup semantics, and rollback logic as a real deployment. Every hash and git commit is real. When you're ready for hardware, run `satdeploy init`.
 
 ## Deploy to real hardware
 
 ### SSH (networked target)
 
-Your target has network access. You don't need any C components — just the Python CLI.
+Your target has network access. You don't need any C components, just the Python CLI.
 
 ```bash
 satdeploy init                   # select "ssh", enter your target's IP
@@ -120,7 +120,7 @@ satdeploy rollback controller        # undo
 satdeploy logs controller            # service logs
 ```
 
-### CSP (air-gapped target, CAN/serial) — experimental
+### CSP (air-gapped target, CAN/serial, experimental)
 
 The CSP path has more moving parts. You need three pieces running:
 
@@ -158,9 +158,9 @@ If you just want to see the workflow without any of this, use `satdeploy demo`.
 
 ## Docs
 
-- **[Command reference](docs/commands.md)** — every command and flag
-- **[Configuration reference](docs/configuration.md)** — full config schema, transports, dependency ordering
-- **[Building from source](docs/building.md)** — Python CLI, agent cross-compile, APM build, CSP version pinning
+- **[Command reference](docs/commands.md)**: every command and flag
+- **[Configuration reference](docs/configuration.md)**: full config schema, transports, dependency ordering
+- **[Building from source](docs/building.md)**: Python CLI, agent cross-compile, APM build, CSP version pinning
 
 ## Requirements
 
