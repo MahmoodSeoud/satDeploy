@@ -1,62 +1,464 @@
-"""Output formatting utilities for CLI."""
+"""Output formatting for the satdeploy CLI.
+
+Goals: aligned columns, quiet color, consistent symbols, and a deploy summary
+that actually tells you what happened. Callers build a small dict/tuple of
+rendering data and hand it to one of the render_* functions — no more
+inline click.echo with \\t and string padding.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Iterable, Optional, Sequence
 
 import click
 
+# ---------------------------------------------------------------------------
+# Symbols — one legend, used everywhere
+# ---------------------------------------------------------------------------
+#
+# Some of these names are locked by tests/test_output.py. Values can change
+# (other tests check `SYMBOLS[name] in result.output` which reads the current
+# value), so we pick glyphs that read well in a modern terminal.
+
 SYMBOLS = {
-    "check": "▸",
-    "cross": "✗",
-    "arrow": "→",
-    "bullet": "•",
+    "check": "●",   # healthy / running
+    "cross": "✗",   # failed / error
+    "arrow": "→",   # pointer ("current", "deployed")
+    "bullet": "·",  # secondary / inactive
+    "drift": "◐",   # half-filled — partial / drift / stopped
+    "step":  "✓",   # a push step that succeeded
+    "rule":  "─",   # horizontal rule
 }
 
+# Color helpers — thin wrappers so we can swap theming later.
+_DIM = "bright_black"
+_ACCENT = "cyan"
+_OK = "green"
+_WARN = "yellow"
+_BAD = "red"
+
+
+def dim(text: str) -> str:
+    return click.style(text, fg=_DIM)
+
+
+def accent(text: str) -> str:
+    return click.style(text, fg=_ACCENT)
+
+
+# ---------------------------------------------------------------------------
+# Simple formatters (backwards-compatible API)
+# ---------------------------------------------------------------------------
 
 def success(message: str) -> str:
-    """Format a success message with green color and checkmark."""
-    return click.style(f"{SYMBOLS['check']} {message}", fg="green")
+    """Green line with the success glyph."""
+    return click.style(f"{SYMBOLS['check']} {message}", fg=_OK)
 
 
 def warning(message: str) -> str:
-    """Format a warning message with yellow color and [WARNING] prefix."""
-    return click.style(f"[WARNING] {message}", fg="yellow")
+    """Yellow line prefixed with a warning glyph."""
+    return click.style(f"! {message}", fg=_WARN)
 
 
 def error(message: str) -> str:
-    """Format an error message with red color and [ERROR] prefix."""
-    return click.style(f"[ERROR] {message}", fg="red")
+    """Red line prefixed with a cross."""
+    return click.style(f"{SYMBOLS['cross']} {message}", fg=_BAD)
 
 
 def step(current: int, total: int, message: str) -> str:
-    """Format a step counter message."""
-    counter = click.style(f"[{current}/{total}]", fg="bright_white")
+    """`[1/5] message` with a dim counter. Tests lock the `[N/M]` shape."""
+    counter = click.style(f"[{current}/{total}]", fg=_DIM)
     return f"{counter} {message}"
 
+
+# ---------------------------------------------------------------------------
+# Time helpers
+# ---------------------------------------------------------------------------
+
+def normalize_timestamp(raw: Optional[str]) -> str:
+    """Return `YYYY-MM-DD HH:MM:SS` for any reasonable input, or '-'."""
+    if not raw:
+        return "-"
+    try:
+        # Accept ISO with 'T', a space, or trailing 'Z'.
+        s = raw.replace("Z", "")
+        dt = datetime.fromisoformat(s)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return raw
+
+
+def format_relative_time(raw: Optional[str]) -> str:
+    """`2m ago`, `3h ago`, `just now`, or the raw date for older stuff."""
+    if not raw:
+        return "-"
+    try:
+        s = raw.replace("Z", "")
+        dt = datetime.fromisoformat(s)
+    except (TypeError, ValueError):
+        return raw
+    if dt.tzinfo is None:
+        now = datetime.now()
+    else:
+        now = datetime.now(timezone.utc).astimezone(dt.tzinfo)
+    delta = now - dt
+    secs = int(delta.total_seconds())
+    if secs < 0:
+        return "just now"
+    if secs < 10:
+        return "just now"
+    if secs < 60:
+        return f"{secs}s ago"
+    if secs < 3600:
+        return f"{secs // 60}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h ago"
+    if secs < 86400 * 7:
+        return f"{secs // 86400}d ago"
+    return dt.strftime("%Y-%m-%d")
+
+
+# ---------------------------------------------------------------------------
+# Target header — `name · transport · endpoint`
+# ---------------------------------------------------------------------------
+
+def render_target_header(
+    *, name: str, transport: str, endpoint: str,
+) -> str:
+    """One-line header shown at the top of status/list.
+
+    Example:
+        demo · local · /Users/mahmood/.satdeploy/demo/target
+    """
+    parts = [
+        click.style(name, fg=_ACCENT, bold=True),
+        dim(" · "),
+        click.style(transport, fg=_OK),
+        dim(" · "),
+        dim(endpoint or "-"),
+    ]
+    return "  " + "".join(parts)
+
+
+def target_endpoint(module_config) -> str:
+    """Pick the best one-line endpoint label for a transport config."""
+    t = getattr(module_config, "transport", None)
+    if t == "csp":
+        endpoint = getattr(module_config, "zmq_endpoint", None) or ""
+        node = getattr(module_config, "agent_node", None)
+        if node:
+            return f"{endpoint}  (node {node})" if endpoint else f"node {node}"
+        return endpoint or "-"
+    if t == "ssh":
+        host = getattr(module_config, "host", None) or "-"
+        user = getattr(module_config, "user", None) or ""
+        return f"{user}@{host}" if user else host
+    if t == "local":
+        return getattr(module_config, "target_dir", None) or "-"
+    return "-"
+
+
+# ---------------------------------------------------------------------------
+# Status table
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StatusRow:
+    app: str
+    state: str               # running | stopped | deployed | failed | not deployed
+    file_hash: str           # short hash or "-"
+    git_prov: Optional[str]  # "main 7c8a8751" or None
+    remote_path: str
+    age: Optional[str] = None  # raw ISO for the last push/rollback
+
+
+_STATE_STYLE = {
+    "running":      (SYMBOLS["check"],  _OK,    "running"),
+    "deployed":     (SYMBOLS["check"],  _OK,    "deployed"),
+    "stopped":      (SYMBOLS["drift"],  _WARN,  "stopped"),
+    "failed":       (SYMBOLS["cross"],  _BAD,   "failed"),
+    "unknown":      (SYMBOLS["drift"],  _DIM,   "unknown"),
+    "not deployed": (SYMBOLS["bullet"], _WARN,  "not deployed"),
+}
+
+
+def render_status_table(
+    *, rows: Sequence[StatusRow], verbose: bool = False,
+) -> str:
+    """Build the full status block: header + rows. Returns the whole string."""
+
+    if not rows:
+        return "  " + dim("No apps configured or deployed.")
+
+    # Column widths — computed from content so nothing ever wraps.
+    w_app = max(8,  max(len(r.app) for r in rows))
+    w_state = 11  # room for "not deployed"
+    w_hash = max(8, max(len(r.file_hash or "-") for r in rows))
+    w_git = max(
+        8,
+        max(len(r.git_prov or "") for r in rows),
+    )
+    w_age = 8
+
+    lines = []
+    # Header
+    header = (
+        f"  {'APP':<{w_app}}  "
+        f"{'HEALTH':<{w_state + 2}}  "
+        f"{'DEPLOYED':<{w_hash}}  "
+        f"{'GIT':<{w_git}}  "
+        f"{'AGE':<{w_age}}"
+    )
+    lines.append(dim(header))
+    ruler = (
+        "  "
+        + SYMBOLS["rule"] * w_app + "  "
+        + SYMBOLS["rule"] * (w_state + 2) + "  "
+        + SYMBOLS["rule"] * w_hash + "  "
+        + SYMBOLS["rule"] * w_git + "  "
+        + SYMBOLS["rule"] * w_age
+    )
+    lines.append(dim(ruler))
+
+    for r in rows:
+        symbol, color, label = _STATE_STYLE.get(r.state, _STATE_STYLE["unknown"])
+        state_cell = f"{symbol} {label}"
+        state_cell_plain = f"{symbol} {label}"  # measured length
+        pad = (w_state + 2) - len(state_cell_plain)
+        state_rendered = click.style(state_cell, fg=color) + " " * max(0, pad)
+
+        hash_rendered = click.style(f"{r.file_hash or '-':<{w_hash}}", fg="white")
+        git_rendered = dim(f"{(r.git_prov or '-'):<{w_git}}")
+        age_raw = format_relative_time(r.age) if r.age else "-"
+        age_rendered = dim(f"{age_raw:<{w_age}}")
+        app_rendered = click.style(f"{r.app:<{w_app}}", bold=True)
+
+        lines.append(
+            f"  {app_rendered}  {state_rendered}  {hash_rendered}  "
+            f"{git_rendered}  {age_rendered}"
+        )
+        if verbose and r.remote_path:
+            lines.append("  " + " " * w_app + "  " + dim(f"└ {r.remote_path}"))
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Versions table (list)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class VersionRow:
+    file_hash: str
+    git_prov: Optional[str]
+    timestamp: Optional[str]  # raw ISO or pre-formatted
+    is_deployed: bool
+
+
+def render_list_table(*, app: str, rows: Sequence[VersionRow]) -> str:
+    if not rows:
+        return dim(f"  No versions found for {app}.")
+
+    w_hash = max(8, max(len(r.file_hash or "-") for r in rows))
+    w_git = max(6, max(len(r.git_prov or "") for r in rows))
+    w_time = 19  # "YYYY-MM-DD HH:MM:SS"
+
+    header_line = (
+        f"  {app}  "
+        + dim(f"· {len(rows)} version{'s' if len(rows) != 1 else ''}")
+    )
+
+    col_header = dim(
+        f"     {'HASH':<{w_hash}}  {'GIT':<{w_git}}  "
+        f"{'TIMESTAMP':<{w_time}}  STATUS"
+    )
+
+    lines = [header_line, "", col_header]
+
+    for r in rows:
+        if r.is_deployed:
+            marker = click.style(SYMBOLS["arrow"], fg=_OK)
+            hash_col = click.style(f"{r.file_hash or '-':<{w_hash}}", fg=_OK)
+            status_col = click.style("deployed", fg=_OK)
+        else:
+            marker = dim(SYMBOLS["bullet"])
+            hash_col = click.style(f"{r.file_hash or '-':<{w_hash}}", fg="white")
+            status_col = dim("backup")
+
+        git_col = dim(f"{(r.git_prov or '-'):<{w_git}}")
+        ts_col = dim(f"{normalize_timestamp(r.timestamp):<{w_time}}")
+        lines.append(f"   {marker} {hash_col}  {git_col}  {ts_col}  {status_col}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Push summary
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PushStep:
+    label: str           # "backup", "upload", "verify", "service"
+    detail: str          # "32c0702b-...bak" etc.
+    ok: bool = True      # False → render with cross, not check
+    skipped: bool = False  # True → render with bullet
+
+
+def render_push_header(
+    *, app: str, target_name: str,
+    old_hash: Optional[str], new_hash: str,
+    old_git: Optional[str], new_git: Optional[str],
+) -> str:
+    arrow = click.style(" → ", fg=_DIM)
+    hero = (
+        "  "
+        + click.style(SYMBOLS["check"], fg=_ACCENT)
+        + " Deploying "
+        + click.style(app, bold=True)
+        + dim(" → ")
+        + click.style(target_name, fg=_ACCENT)
+        + "\n"
+    )
+
+    def fmt(h: Optional[str], g: Optional[str], tag: str) -> str:
+        h_col = click.style((h or "-")[:8].ljust(8), fg="white")
+        g_col = dim((g or "-").ljust(20))
+        tag_col = dim(f"({tag})")
+        return f"     {h_col}  {g_col}  {tag_col}"
+
+    if old_hash and old_hash != new_hash:
+        body = (
+            fmt(old_hash, old_git, "current") + "\n"
+            + fmt(new_hash, new_git, "new")
+        )
+    else:
+        body = fmt(new_hash, new_git, "deploying")
+
+    return hero + "\n" + body + "\n"
+
+
+def render_push_step(s: PushStep) -> str:
+    if s.skipped:
+        glyph = dim(SYMBOLS["bullet"])
+        label = dim(f"{s.label:<10}")
+    elif s.ok:
+        glyph = click.style(SYMBOLS["step"], fg=_OK)
+        label = click.style(f"{s.label:<10}", fg=_OK)
+    else:
+        glyph = click.style(SYMBOLS["cross"], fg=_BAD)
+        label = click.style(f"{s.label:<10}", fg=_BAD)
+    detail = dim(s.detail)
+    return f"  {glyph}  {label}  {detail}"
+
+
+def render_push_footer(
+    *, duration_s: float, rollback_hint: str,
+) -> str:
+    took = dim(f"Deployed in {duration_s:.2f}s.")
+    hint = dim("Rollback with: ") + click.style(rollback_hint, fg=_ACCENT)
+    return f"\n  {took}  {hint}"
+
+
+# ---------------------------------------------------------------------------
+# Rollback header
+# ---------------------------------------------------------------------------
+
+def render_rollback_header(
+    *, app: str, target_name: str,
+    from_hash: Optional[str], to_hash: Optional[str],
+    to_timestamp: Optional[str],
+) -> str:
+    hero = (
+        "  "
+        + click.style(SYMBOLS["arrow"], fg=_WARN)
+        + " Rolling back "
+        + click.style(app, bold=True)
+        + dim(" on ")
+        + click.style(target_name, fg=_ACCENT)
+    )
+    if from_hash and to_hash:
+        detail = (
+            "     "
+            + click.style((from_hash or "-")[:12], fg="white")
+            + dim("  →  ")
+            + click.style((to_hash or "-")[:12], fg=_OK)
+        )
+        if to_timestamp:
+            detail += dim(f"   ({normalize_timestamp(to_timestamp)})")
+        return hero + "\n\n" + detail + "\n"
+    return hero + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Config renderer
+# ---------------------------------------------------------------------------
+
+def render_config_block(*, cfg, module) -> str:
+    lines = []
+    lines.append(
+        render_target_header(
+            name=cfg.module_name,
+            transport=module.transport,
+            endpoint=target_endpoint(module),
+        )
+    )
+    lines.append("")
+    lines.append("  " + dim("config file: ") + str(cfg.config_path))
+    lines.append("  " + dim("backup dir:  ") + str(cfg.backup_dir))
+    if getattr(module, "appsys_node", None):
+        lines.append("  " + dim("appsys node: ") + str(module.appsys_node))
+    else:
+        lines.append("  " + dim("appsys node: 0  (restart disabled)"))
+
+    apps = cfg.apps or {}
+    lines.append("")
+    lines.append("  " + click.style(f"Apps ({len(apps)})", bold=True))
+    if not apps:
+        lines.append("  " + dim("(none configured)"))
+        return "\n".join(lines)
+
+    for app_name, app_data in apps.items():
+        lines.append("")
+        lines.append(
+            "  "
+            + click.style(SYMBOLS["arrow"], fg=_ACCENT)
+            + " "
+            + click.style(app_name, bold=True)
+        )
+        lines.append("    " + dim("local:   ") + str(app_data.get("local", "-")))
+        lines.append("    " + dim("remote:  ") + str(app_data.get("remote", "-")))
+        if app_data.get("service"):
+            lines.append("    " + dim("service: ") + str(app_data["service"]))
+        if app_data.get("param"):
+            lines.append("    " + dim("param:   ") + str(app_data["param"]))
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Exception styling (unchanged behavior, simpler code)
+# ---------------------------------------------------------------------------
 
 class SatDeployError(click.ClickException):
     """Custom exception that displays error messages in red."""
 
     def format_message(self) -> str:
-        """Format the error message with red color and cross symbol."""
         return error(self.message)
 
     def show(self, file=None):
-        """Show the error message without the 'Error:' prefix."""
         if file is None:
             file = click.get_text_stream("stderr")
         click.echo(self.format_message(), file=file)
 
 
 def _style_exception(e: click.ClickException) -> None:
-    """Apply red styling to a Click exception."""
     if isinstance(e, SatDeployError):
-        return  # Already styled
-
-    # Capture original format_message
+        return
     original_format = e.format_message
-
-    # Override format_message to add styling
     e.format_message = lambda: error(original_format())
 
-    # Override show to remove "Error:" prefix
     def custom_show(file=None):
         if file is None:
             file = click.get_text_stream("stderr")
@@ -69,7 +471,6 @@ class ColoredGroup(click.Group):
     """Custom Click group that displays all errors in red."""
 
     def invoke(self, ctx):
-        """Override invoke to catch and color all Click exceptions."""
         try:
             return super().invoke(ctx)
         except click.ClickException as e:
@@ -77,7 +478,6 @@ class ColoredGroup(click.Group):
             raise
 
     def main(self, *args, **kwargs):
-        """Override main to catch and color all Click exceptions."""
         try:
             return super().main(*args, **kwargs)
         except click.ClickException as e:

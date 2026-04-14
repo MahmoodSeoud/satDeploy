@@ -15,7 +15,30 @@ from satdeploy.deployer import Deployer
 from satdeploy.hash import compute_file_hash
 from satdeploy.provenance import capture_provenance, is_dirty, resolve_provenance
 from satdeploy.history import DeploymentRecord, History
-from satdeploy.output import success, warning, step, SYMBOLS, SatDeployError, ColoredGroup
+from satdeploy.output import (
+    ColoredGroup,
+    PushStep,
+    SatDeployError,
+    StatusRow,
+    SYMBOLS,
+    VersionRow,
+    accent,
+    dim,
+    error,
+    normalize_timestamp,
+    render_config_block,
+    render_list_table,
+    render_push_footer,
+    render_push_header,
+    render_push_step,
+    render_rollback_header,
+    render_status_table,
+    render_target_header,
+    step,
+    success,
+    target_endpoint,
+    warning,
+)
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 from satdeploy.templates import render_service_template, compute_service_hash
@@ -705,17 +728,31 @@ def push(
             module_config, config.backup_dir, apps=apps_dict_for_transport,
         )
         if module_config.transport == "csp":
-            click.echo(f"Connecting to {module_config.zmq_endpoint}...")
+            click.echo(dim(f"  Connecting to {module_config.zmq_endpoint}..."))
 
         try:
             transport.connect()
 
             for app in apps:
+                import time as _time
+                start_time = _time.monotonic()
+
                 app_config = _get_app_cfg(app)
                 local_path = os.path.expanduser(local or app_config.local) if len(apps) == 1 else os.path.expanduser(app_config.local)
                 remote_path = app_config.remote
 
                 file_size = os.path.getsize(local_path)
+                size_label = (
+                    f"{file_size / 1024:.1f} KB"
+                    if file_size < 1024 * 1024
+                    else f"{file_size / (1024 * 1024):.1f} MB"
+                )
+
+                # Capture old state BEFORE deploying so the push summary can
+                # render `old_hash → new_hash`.
+                prev_deploy = history.get_last_deployment(app)
+                old_hash = prev_deploy.file_hash if prev_deploy and prev_deploy.success else None
+                old_git = prev_deploy.git_hash if prev_deploy and prev_deploy.success else None
 
                 def _show_progress(bytes_sent, total):
                     pct = int(bytes_sent * 100 / total) if total > 0 else 100
@@ -725,9 +762,6 @@ def push(
                     click.echo(f"\r  Uploading {app}: {bar} {pct}% ({bytes_sent}/{total} bytes)", nl=False)
                     if bytes_sent >= total:
                         click.echo()  # newline when done
-
-                if module_config.transport == "csp":
-                    click.echo(f"Deploying {app} via CSP ({file_size} bytes)...")
 
                 deploy_kwargs = dict(
                     app_name=app,
@@ -747,23 +781,83 @@ def push(
                 if result.success:
                     # Compute local hash for history
                     local_hash = compute_file_hash(local_path)
+                    prov_tuple = provenance_map.get(app, (None, "local"))
+                    provenance, prov_source = prov_tuple
 
-                    # Post-deploy health check: only check if app has a service or param
+                    # Header
+                    click.echo("")
+                    click.echo(render_push_header(
+                        app=app,
+                        target_name=config.module_name,
+                        old_hash=old_hash,
+                        new_hash=local_hash,
+                        old_git=old_git,
+                        new_git=provenance,
+                    ))
+
+                    # Step list
+                    if result.skipped:
+                        click.echo(render_push_step(PushStep(
+                            label="unchanged",
+                            detail=f"already deployed at {local_hash[:8]} — use --force to redeploy",
+                            skipped=True,
+                        )))
+                    elif result.restored:
+                        click.echo(render_push_step(PushStep(
+                            label="restored",
+                            detail=f"matching backup reused ({local_hash[:8]})",
+                        )))
+                    else:
+                        backup_detail = (
+                            os.path.basename(result.backup_path)
+                            if result.backup_path else dim("no prior version — skipped")
+                        )
+                        click.echo(render_push_step(PushStep(
+                            label="backup", detail=str(backup_detail),
+                            skipped=not result.backup_path,
+                        )))
+                        click.echo(render_push_step(PushStep(
+                            label="upload", detail=f"{size_label} · sha256 {local_hash[:12]}",
+                        )))
+                        click.echo(render_push_step(PushStep(
+                            label="verify", detail="checksum ok",
+                        )))
+
+                    # Service / health check
                     if app_config.service or app_config.param:
                         try:
                             app_statuses = transport.get_status()
                             app_status = app_statuses.get(app)
                             if app_status and app_status.running:
-                                click.echo(success(f"Health check passed for {app}"))
+                                click.echo(render_push_step(PushStep(
+                                    label="service", detail="health check passed",
+                                )))
                             elif app_status:
-                                click.echo(warning(f"Health check: {app} is not running"))
+                                click.echo(render_push_step(PushStep(
+                                    label="service", detail="health check: not running", ok=False,
+                                )))
                             else:
-                                click.echo(warning(f"Health check: {app} not found in agent status"))
+                                click.echo(render_push_step(PushStep(
+                                    label="service", detail="health check: not found in agent status", ok=False,
+                                )))
                         except TransportError:
-                            click.echo(warning(f"Health check: status query timed out"))
+                            click.echo(render_push_step(PushStep(
+                                label="service", detail="health check: status query timed out", ok=False,
+                            )))
+                    else:
+                        click.echo(render_push_step(PushStep(
+                            label="service", detail="no service configured — skipped",
+                            skipped=True,
+                        )))
 
-                    prov_tuple = provenance_map.get(app, (None, "local"))
-                    provenance, prov_source = prov_tuple
+                    # Footer
+                    elapsed = _time.monotonic() - start_time
+                    click.echo(render_push_footer(
+                        duration_s=elapsed,
+                        rollback_hint=f"satdeploy rollback {app}",
+                    ))
+                    click.echo("")
+
                     history.record(DeploymentRecord(
                         module=config.module_name,
                         app=app,
@@ -775,18 +869,6 @@ def push(
                         git_hash=provenance,
                         provenance_source=prov_source,
                     ))
-                    provenance_display = f" ({provenance})" if provenance else ""
-                    if result.skipped:
-                        click.echo(warning(
-                            f"{app} ({local_hash}) is already deployed. "
-                            f"Use --force to push anyway."
-                        ))
-                    elif result.restored:
-                        click.echo(warning(
-                            f"{app} ({local_hash}) restored from backup."
-                        ))
-                    else:
-                        click.echo(success(f"Deployed {app} ({local_hash}){provenance_display}"))
                 else:
                     history.record(DeploymentRecord(
                         module=config.module_name,
@@ -944,85 +1026,62 @@ def status(config_path: Path | None, node_override: int | None):
         transport = get_transport(
             module_config, config.backup_dir, apps=apps_dict_for_transport,
         )
-        if module_config.transport == "csp":
-            click.echo(f"Target: node {module_config.agent_node}")
-        else:
-            click.echo(f"Target: {module_config.target_dir}")
+
+        click.echo(render_target_header(
+            name=config.module_name,
+            transport=module_config.transport,
+            endpoint=target_endpoint(module_config),
+        ))
         click.echo("")
 
-        # Collect all app names: configured + any ad-hoc from history
         all_app_names = list(apps.keys()) if apps else []
         module_state = history.get_module_state(config.module_name)
-        # Only show ad-hoc apps that had at least one successful deploy
         adhoc_apps = [name for name in module_state
                       if name not in all_app_names and module_state[name].success]
 
         if not all_app_names and not adhoc_apps:
-            click.echo("No apps configured or deployed.")
+            click.echo("  " + dim("No apps configured or deployed."))
             return
-
-        # Print header
-        header = f"    {'APP':<16}\t{'STATUS':<14}\t{'HASH':<10}\t{'PATH'}"
-        click.echo(click.style(header, fg="bright_black"))
-        click.echo(click.style("    " + "-" * 60, fg="bright_black"))
 
         try:
             transport.connect()
             app_statuses = transport.get_status()
 
+            rows: list[StatusRow] = []
             for app_name in all_app_names + adhoc_apps:
                 app_status = app_statuses.get(app_name)
-
-                # Provenance map keyed by file_hash — lets status show the
-                # original git commit for the file currently on target, even
-                # after a rollback (rollback records don't carry git_hash,
-                # but the push that originally introduced this hash does).
                 app_prov_map = build_provenance_map(history, app_name)
+                last_deploy = module_state.get(app_name)
 
                 if app_status:
                     hash_display = app_status.file_hash or "-"
                     remote_path = app_status.remote_path or ""
-                    if app_status.running:
-                        symbol = click.style(SYMBOLS["check"], fg="green")
-                        status_text = "running"
-                        status_color = "green"
-                    else:
-                        symbol = click.style(SYMBOLS["bullet"], fg="green")
-                        status_text = "deployed"
-                        status_color = "green"
-
+                    state = "running" if app_status.running else "deployed"
                     git_prov = app_prov_map.get(hash_display)
+                    age = last_deploy.timestamp if last_deploy else None
+                elif last_deploy and last_deploy.success:
+                    hash_display = last_deploy.file_hash or "-"
+                    remote_path = last_deploy.remote_path or ""
+                    state = "deployed"
+                    git_prov = app_prov_map.get(hash_display) or last_deploy.git_hash
+                    age = last_deploy.timestamp
                 else:
-                    # Not in agent status — check history for previous deploys
-                    last_deploy = module_state.get(app_name)
-                    if last_deploy and last_deploy.success:
-                        symbol = click.style(SYMBOLS["bullet"], fg="bright_black")
-                        status_text = "deployed"
-                        status_color = "bright_black"
-                        hash_display = last_deploy.file_hash or "-"
-                        remote_path = last_deploy.remote_path or ""
-                        git_prov = app_prov_map.get(hash_display) or last_deploy.git_hash
-                    else:
-                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
-                        status_text = "not deployed"
-                        status_color = "yellow"
-                        hash_display = "-"
-                        remote_path = ""
-                        git_prov = None
+                    hash_display = "-"
+                    remote_path = ""
+                    state = "not deployed"
+                    git_prov = None
+                    age = None
 
-                name_col = f"{app_name:<16}"
-                status_col = f"{status_text:<14}"
-                hash_text = hash_display
-                if git_prov:
-                    hash_text += f" ({git_prov})"
-                hash_col = f"{hash_text:<10}"
+                rows.append(StatusRow(
+                    app=app_name,
+                    state=state,
+                    file_hash=hash_display,
+                    git_prov=git_prov,
+                    remote_path=remote_path,
+                    age=age,
+                ))
 
-                click.echo(
-                    f"  {symbol} {name_col}\t"
-                    f"{click.style(status_col, fg=status_color)}\t"
-                    f"{click.style(hash_col, fg='white')}\t"
-                    f"{click.style(remote_path, fg='bright_black')}"
-                )
+            click.echo(render_status_table(rows=rows))
 
         except TransportError as e:
             raise SatDeployError(str(e))
@@ -1033,92 +1092,73 @@ def status(config_path: Path | None, node_override: int | None):
 
     # SSH transport: use direct SSH connection
     target = {"host": module_config.host, "user": module_config.user}
-    click.echo(f"Target: {target['host']} ({target['user']})")
+    click.echo(render_target_header(
+        name=config.module_name,
+        transport=module_config.transport,
+        endpoint=target_endpoint(module_config),
+    ))
     click.echo("")
 
-    # Collect all app names: configured + any ad-hoc from history
     ssh_all_app_names = list(apps.keys()) if apps else []
     ssh_module_state = history.get_module_state(config.module_name)
     ssh_adhoc_apps = [name for name in ssh_module_state
                       if name not in ssh_all_app_names and ssh_module_state[name].success]
 
     if not ssh_all_app_names and not ssh_adhoc_apps:
-        click.echo("No apps configured or deployed.")
+        click.echo("  " + dim("No apps configured or deployed."))
         return
-
-    # Print header
-    header = f"    {'APP':<16}\t{'STATUS':<14}\t{'HASH':<10}\t{'PATH'}"
-    click.echo(click.style(header, fg="bright_black"))
-    click.echo(click.style("    " + "-" * 60, fg="bright_black"))
 
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
             service_manager = ServiceManager(ssh)
 
-            # Build combined app configs: configured apps + ad-hoc from history
             all_apps_to_show = dict(apps) if apps else {}
             for adhoc_name in ssh_adhoc_apps:
                 rec = ssh_module_state[adhoc_name]
                 all_apps_to_show[adhoc_name] = {"remote": rec.remote_path, "service": None, "_adhoc": True}
 
+            rows: list[StatusRow] = []
             for app_name, app_config in all_apps_to_show.items():
                 service = app_config.get("service")
                 remote_path = app_config.get("remote", "")
 
-                # First check if file exists
                 deployed = ssh.file_exists(remote_path)
 
-                # Get hash and git provenance from history (only if actually deployed)
                 hash_display = "-"
                 git_prov = None
+                age = None
                 if deployed:
                     last_deploy = history.get_last_deployment(app_name)
                     if last_deploy and last_deploy.success:
                         hash_display = last_deploy.file_hash or "-"
                         git_prov = last_deploy.git_hash
+                        age = last_deploy.timestamp
 
                 if not deployed:
-                    symbol = click.style(SYMBOLS["bullet"], fg="yellow")
-                    status_text = "not deployed"
-                    status_color = "yellow"
+                    state = "not deployed"
                 elif service:
-                    # File exists and has a service - check service status
                     svc_status = service_manager.get_status(service)
                     if svc_status == ServiceStatus.RUNNING:
-                        symbol = click.style(SYMBOLS["check"], fg="green")
-                        status_text = "running"
-                        status_color = "green"
+                        state = "running"
                     elif svc_status == ServiceStatus.STOPPED:
-                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
-                        status_text = "stopped"
-                        status_color = "yellow"
+                        state = "stopped"
                     elif svc_status == ServiceStatus.FAILED:
-                        symbol = click.style(SYMBOLS["cross"], fg="red")
-                        status_text = "failed"
-                        status_color = "red"
+                        state = "failed"
                     else:
-                        symbol = click.style(SYMBOLS["bullet"], fg="white")
-                        status_text = "unknown"
-                        status_color = "white"
+                        state = "unknown"
                 else:
-                    # File exists but no service (library)
-                    symbol = click.style(SYMBOLS["bullet"], fg="green")
-                    status_text = "deployed"
-                    status_color = "green"
+                    state = "deployed"
 
-                name_col = f"{app_name:<16}"
-                status_col = f"{status_text:<14}"
-                hash_text = hash_display
-                if git_prov:
-                    hash_text += f" ({git_prov})"
-                hash_col = f"{hash_text:<10}"
+                rows.append(StatusRow(
+                    app=app_name,
+                    state=state,
+                    file_hash=hash_display,
+                    git_prov=git_prov,
+                    remote_path=remote_path,
+                    age=age,
+                ))
 
-                click.echo(
-                    f"  {symbol} {name_col}\t"
-                    f"{click.style(status_col, fg=status_color)}\t"
-                    f"{click.style(hash_col, fg='white')}\t"
-                    f"{click.style(remote_path, fg='bright_black')}"
-                )
+            click.echo(render_status_table(rows=rows))
 
     except SSHError as e:
         raise SatDeployError(str(e))
@@ -1192,36 +1232,17 @@ def list_backups(app: str, config_path: Path | None, node_override: int | None):
                 click.echo(f"No versions found for {app}.")
                 return
 
-            click.echo(click.style(f"Versions for {app}:", bold=True))
-            click.echo("")
-            # Print header
-            header = f"    {'HASH':<10}\t{'TIMESTAMP':<20}\t{'STATUS'}"
-            click.echo(click.style(header, fg="bright_black"))
-            click.echo(click.style("    " + "-" * 45, fg="bright_black"))
-
             git_hash_map = build_provenance_map(history, app)
-
-            # Show all versions, arrow on deployed one
-            for version in versions:
-                hash_display = version.get("hash") or "-"
-                timestamp_display = version.get("timestamp") or "-"
-                is_deployed = hash_display == current_hash
-                git_prov = git_hash_map.get(hash_display)
-                hash_text = hash_display
-                if git_prov:
-                    hash_text += f" ({git_prov})"
-
-                if is_deployed:
-                    bullet = click.style(SYMBOLS["arrow"], fg="green")
-                    hash_col = click.style(f"{hash_text:<10}", fg="green")
-                    status_col = click.style("deployed", fg="green")
-                else:
-                    bullet = click.style(SYMBOLS["bullet"], fg="blue")
-                    hash_col = click.style(f"{hash_text:<10}", fg="blue")
-                    status_col = click.style("backup", fg="blue")
-
-                timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
-                click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
+            rendered = [
+                VersionRow(
+                    file_hash=v.get("hash") or "-",
+                    git_prov=git_hash_map.get(v.get("hash") or ""),
+                    timestamp=normalize_timestamp(v.get("timestamp")),
+                    is_deployed=(v.get("hash") == current_hash),
+                )
+                for v in versions
+            ]
+            click.echo(render_list_table(app=app, rows=rendered))
 
         except TransportError as e:
             raise SatDeployError(str(e))
@@ -1273,36 +1294,17 @@ def list_backups(app: str, config_path: Path | None, node_override: int | None):
                 click.echo(f"No versions found for {app}.")
                 return
 
-            click.echo(click.style(f"Versions for {app}:", bold=True))
-            click.echo("")
-            # Print header
-            header = f"    {'HASH':<10}\t{'TIMESTAMP':<20}\t{'STATUS'}"
-            click.echo(click.style(header, fg="bright_black"))
-            click.echo(click.style("    " + "-" * 45, fg="bright_black"))
-
             git_hash_map = build_provenance_map(history, app)
-
-            # Show all versions, arrow on deployed one
-            for version in versions:
-                hash_display = version.get("hash") or "-"
-                timestamp_display = version.get("timestamp") or "-"
-                is_deployed = hash_display == current_hash
-                git_prov = git_hash_map.get(hash_display)
-                hash_text = hash_display
-                if git_prov:
-                    hash_text += f" ({git_prov})"
-
-                if is_deployed:
-                    bullet = click.style(SYMBOLS["arrow"], fg="green")
-                    hash_col = click.style(f"{hash_text:<10}", fg="green")
-                    status_col = click.style("deployed", fg="green")
-                else:
-                    bullet = click.style(SYMBOLS["bullet"], fg="blue")
-                    hash_col = click.style(f"{hash_text:<10}", fg="blue")
-                    status_col = click.style("backup", fg="blue")
-
-                timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
-                click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
+            rendered = [
+                VersionRow(
+                    file_hash=v.get("hash") or "-",
+                    git_prov=git_hash_map.get(v.get("hash") or ""),
+                    timestamp=normalize_timestamp(v.get("timestamp")),
+                    is_deployed=(v.get("hash") == current_hash),
+                )
+                for v in versions
+            ]
+            click.echo(render_list_table(app=app, rows=rendered))
 
         except SSHError as e:
             raise SatDeployError(str(e))
@@ -1345,17 +1347,16 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
         try:
             transport.connect()
 
-            if module_config.transport == "csp":
-                click.echo(f"Rolling back {app} via CSP...")
-            else:
-                click.echo(f"Rolling back {app}...")
+            # Capture current hash for the header
+            prev = history.get_last_deployment(app)
+            from_hash = prev.file_hash if prev and prev.success else None
+
             result = transport.rollback(
                 app_name=app,
                 backup_hash=target_hash,
             )
 
             if result.success:
-                # Use the actual backup hash from the response if available
                 actual_hash = target_hash or (result.backup_path or "").split("-")[-1].replace(".bak", "") or ""
                 history.record(DeploymentRecord(
                     module=config.module_name,
@@ -1365,10 +1366,19 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
                     action="rollback",
                     success=True,
                 ))
+                click.echo("")
+                click.echo(render_rollback_header(
+                    app=app,
+                    target_name=config.module_name,
+                    from_hash=from_hash,
+                    to_hash=actual_hash or None,
+                    to_timestamp=None,
+                ))
                 if actual_hash:
-                    click.echo(success(f"Rolled back {app} to {actual_hash}"))
+                    click.echo("  " + success(f"Rolled back {app} to {actual_hash}"))
                 else:
-                    click.echo(success(f"Rolled back {app}"))
+                    click.echo("  " + success(f"Rolled back {app}"))
+                click.echo("")
             else:
                 history.record(DeploymentRecord(
                     module=config.module_name,
@@ -1525,46 +1535,8 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
 def config(config_path: Path | None):
     """Show current configuration."""
     cfg = load_config(config_path)
-
-    click.echo(f"Config file: {cfg.config_path}")
-
     module = cfg.get_target()
-
-    # Defaults block (matches APM format)
-    click.echo(f"\nDefaults:")
-    if module.appsys_node:
-        click.echo(f"  appsys_node: {module.appsys_node}")
-    else:
-        click.echo(f"  appsys_node: 0 (restart disabled)")
-
-    # Transport block (Python CLI-specific, APM doesn't need this)
-    click.echo(f"\nTransport:")
-    click.echo(f"  type:          {module.transport}")
-    if module.transport == "ssh":
-        click.echo(f"  host:          {module.host}")
-        click.echo(f"  user:          {module.user}")
-    elif module.transport == "csp":
-        click.echo(f"  zmq_endpoint:  {module.zmq_endpoint}")
-        click.echo(f"  agent_node:    {module.agent_node}")
-        click.echo(f"  ground_node:   {module.ground_node}")
-    elif module.transport == "local":
-        click.echo(f"  target_dir:    {module.target_dir}")
-    click.echo(f"  backup_dir:    {cfg.backup_dir}")
-
-    apps = cfg.apps
-    click.echo(f"\nApps: {len(apps) if apps else 0}")
-    if not apps:
-        click.echo("  (none configured)")
-        return
-
-    for app_name, app_data in apps.items():
-        click.echo(f"  {app_name}:")
-        click.echo(f"    local:       {app_data.get('local', '-')}")
-        click.echo(f"    remote:      {app_data.get('remote', '-')}")
-        if app_data.get("service"):
-            click.echo(f"    service:     {app_data['service']}")
-        if app_data.get("param"):
-            click.echo(f"    param:       {app_data['param']}")
+    click.echo(render_config_block(cfg=cfg, module=module))
 
 
 @main.command()
