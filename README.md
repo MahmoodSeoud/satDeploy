@@ -10,13 +10,13 @@
 We flew [DISCO-2](https://discosat.dk/v2_disco-2/), a 3U student CubeSat, and then spent weeks trying to recreate what was on it.
 
 
-Months of incremental updates over USB drives, ad-hoc SCP scripts, and Slack messages saying "I updated the binary." By launch, nobody could point at the hardware and say which commit was on it. After launch, we spent weeks trying to recreate the state on our flatsat from memory and old tmux sessions.
+The payload ran a Yocto Linux image with several apps on it, each on its own release cadence, each updated the same way: rebuild locally, copy the binary over USB or SCP, and post "I updated the binary" in Slack. By launch, nobody could list every commit running on the hardware with confidence. After launch, rebuilding the same set on our flatsat took weeks of chasing memory and old tmux sessions, and we still ran into lib version mismatches we hadn't known were there.
 
 satdeploy is what we built so it doesn't happen again. Every deploy is versioned, hash-verified, and tagged with the git commit it came from. Every file can be rolled back with one command. It works over SSH for networked targets on the bench, and over [CSP](https://github.com/spaceinventor/libcsp) (CAN bus, KISS serial, ZMQ) for air-gapped satellite links.
 
 > DISCO-2 is a 3U student CubeSat from Aarhus University, SDU, and ITU Copenhagen, launched on SpaceX Transporter-16 (March 30, 2026) to image Arctic glaciers from a 510 km sun-synchronous orbit. Coverage: [Danish Space News](https://danishspacenews.substack.com/p/disco-2-one-of-the-most-ambitious), [The Danish Dream](https://thedanishdream.com/danish-society/science/danish-students-launch-satellite-to-track-melting-arctic/), [project site](https://projects.au.dk/ausat/disco-2).
 
-> **Early stage, but heading to orbit.** We built satdeploy *after* DISCO-2 launched, so the current payload is flying without it. The next uplink window will push satdeploy to the DISCO-2 payload, and every deploy after that will be versioned, hash-verified, and rollback-able from the ground. Until then it runs on our flatsat, and we're looking for other satellite teams to try it before we trust it in orbit ourselves. Does this fit your workflow? What's missing? [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues) or reach out.
+> **Early stage, but heading to orbit.** We built satdeploy *after* DISCO-2 launched, so the current payload is flying without it. The next uplink window will push satdeploy to the DISCO-2 payload, and every deploy after that will be versioned, hash-verified, and rollback-able from the ground. Until then it runs on our flatsat, and we're looking for other satellite teams to try it before we trust it in orbit ourselves. Does this fit your workflow? What's missing? [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues/new) or reach out.
 
 ## Try it now
 
@@ -83,9 +83,6 @@ $ satdeploy status
   test_app  ● running      32c0702b  main@0c7e8fb2  just now
 ```
 
-The thing to notice: every line shows both a file hash *and* the git commit it came from, and that link survives rollback. "What's live right now" is always a real commit SHA you can `git show`. That's the whole pitch.
-
-The demo uses the same `LocalTransport`, history database, backup semantics, and rollback logic as a real deployment. Every hash and git commit is real. When you're ready for hardware, run `satdeploy init`.
 
 ## Deploy to real hardware
 
