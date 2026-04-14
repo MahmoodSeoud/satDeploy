@@ -119,10 +119,9 @@ satdeploy rollback <app>            # Restore previous version
 satdeploy rollback <app> <hash>     # Restore specific version
 satdeploy logs <app>                # Show service logs
 satdeploy config                    # Show current config
-satdeploy demo start                # Start simulated satellite (Docker)
-satdeploy demo stop                 # Stop simulator
-satdeploy demo shell                # Shell into the satellite (streams agent logs)
-satdeploy init                # Generate config for real hardware
+satdeploy demo                      # Zero-prerequisite workflow demo (local target)
+satdeploy demo stop                 # Tear down the demo
+satdeploy init                      # Generate config for real hardware
 
 # Switch targets with --config
 satdeploy status --config ~/.satdeploy/som2/config.yaml

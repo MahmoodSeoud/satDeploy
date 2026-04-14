@@ -22,73 +22,75 @@ So we built satdeploy. Every deploy is versioned, hash-verified, and recorded. E
 
 ## What it does
 
-- **Push files to your satellite or flatsat** with `satdeploy push`. Tracks what was deployed, when, and from which git commit.
-- **See what's running** with `satdeploy status`. Hash-verified, so you know if something changed outside satdeploy.
-- **Roll back instantly** with `satdeploy rollback`. Every deploy is backed up with its content hash.
-- **Works over SSH and CSP.** SSH for networked targets. CubeSat Space Protocol over CAN bus or serial for air-gapped satellite links.
+- **Deploy to your flatsat over Ethernet/SSH** — every push is versioned, hash-verified, and tagged with the git commit that built the binary. `satdeploy push` replaces whatever SCP script or Ansible playbook your team is hating this week.
+- **Same tool in orbit over CSP/CAN/serial** — when your hardware launches, switch the transport from `ssh` to `csp` in the config. Same CLI, same history database, same rollback semantics. No second tool to learn, no second workflow to build.
+- **See what's running** with `satdeploy status`. Hash-verified against the target, so you know if something changed outside satdeploy — including the git commit the deployed binary came from.
+- **Roll back in one command** with `satdeploy rollback`. Every deploy is backed up with its content hash; the git provenance follows the rollback so you always know exactly what commit is live.
 - **Complements Yocto.** Yocto builds your base image. satdeploy tracks the incremental updates that happen during development and in orbit.
 
 ## Try it now
 
-Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) running (free for personal and education use).
+Zero dependencies beyond Python and git. No Docker, no satellite, no hardware.
 
 ```bash
-pipx install satdeploy         # or: pip install satdeploy
-satdeploy demo start            # starts a simulated satellite via Docker
+pipx install satdeploy   # or: pip install satdeploy
+satdeploy demo           # 10 seconds end-to-end — no prerequisites
 ```
 
-This starts a simulated satellite, configures a test app, and prints a quick-start guide. Then:
+`satdeploy demo` sets up a throwaway git repo + local target directory and pre-installs test_app v1.0.0. Then try the real product loop:
 
 ```bash
-satdeploy status                # See what's deployed
-satdeploy push test_app         # Deploy a new version
-satdeploy list test_app         # See version history
-satdeploy rollback test_app     # Roll back to previous
-satdeploy logs test_app         # View service logs
-satdeploy demo shell            # Shell into the satellite
-satdeploy demo stop             # Clean up
+satdeploy status              # See what's deployed (v1, git-tagged)
+satdeploy push test_app       # Deploy v2 (new hash, new commit)
+satdeploy rollback test_app   # Undo — one command, git tag carries through
+satdeploy demo stop           # Tear it down when you're done
 ```
 
-Docker is only used for the demo simulator. Real deployments use SSH or CSP directly.
+The demo uses the same `LocalTransport`, `History` database, backup semantics, and rollback logic as a real deployment — every hash and git commit shown is real. When you're ready for real hardware, run `satdeploy init` and point at your flatsat over SSH or your satellite over CSP.
 
 ## Example Session
 
-The output below is the real `satdeploy demo` flow — what you'll see after `satdeploy demo start` on your own machine.
+Real output from `satdeploy demo` — exactly what you'll see on your own machine after `pipx install satdeploy`:
 
 ```
 $ satdeploy status
-Target: node 5425
+Target: ~/.satdeploy/demo/target
 
-    APP              STATUS        HASH       PATH
+    APP              STATUS        HASH                      PATH
     ------------------------------------------------------------
-  • test_app        deployed      32c0702b   /opt/demo/bin/test_app
+  ▸ test_app        running       32c0702b (main@0c7e8fb2)  /opt/demo/bin/test_app
 
 $ satdeploy push test_app
-Connecting to tcp://localhost:9600...
-Deploying test_app via CSP (62 bytes)...
-  Uploading test_app: ████████████████████ 100% (62/62 bytes)
-▸ Deployed test_app (5f3413a2)
+▸ Deployed test_app (5f3413a2) (main@1f1750a6)
 
 $ satdeploy status
-Target: node 5425
+Target: ~/.satdeploy/demo/target
 
-    APP              STATUS        HASH       PATH
+    APP              STATUS        HASH                      PATH
     ------------------------------------------------------------
-  • test_app        deployed      5f3413a2   /opt/demo/bin/test_app
+  ▸ test_app        running       5f3413a2 (main@1f1750a6)  /opt/demo/bin/test_app
 
 $ satdeploy list test_app
 Versions for test_app:
 
-    HASH       TIMESTAMP            STATUS
+    HASH                      TIMESTAMP            STATUS
     ---------------------------------------------
-  • 32c0702b  2026-04-13T17:26:16  backup
-  → 5f3413a2  2026-04-13T17:26:16  deployed
+  • 32c0702b (main@0c7e8fb2)  2026-04-14T12:49:16  backup
+  → 5f3413a2 (main@1f1750a6)  2026-04-14T12:49:16  deployed
 
 $ satdeploy rollback test_app
-Connecting to tcp://localhost:9600...
-Rolling back test_app via CSP...
+Rolling back test_app...
 ▸ Rolled back test_app to 32c0702b
+
+$ satdeploy status
+Target: ~/.satdeploy/demo/target
+
+    APP              STATUS        HASH                      PATH
+    ------------------------------------------------------------
+  ▸ test_app        running       32c0702b (main@0c7e8fb2)  /opt/demo/bin/test_app
 ```
+
+Notice the last line: after rollback, `status` shows both the file hash *and* the git commit it came from. satdeploy tracks which commit is live on your hardware across every push and rollback — you always know exactly what's running.
 
 ## Deploy to Real Hardware
 
@@ -280,12 +282,12 @@ satdeploy logs <app> -l 50                   # Show last 50 lines
 satdeploy config
 ```
 
-### demo — Simulated satellite (Python CLI only)
+### demo — Zero-prerequisite workflow demo (Python CLI only)
 
 ```
-satdeploy demo start          # Start simulated satellite (Docker)
-satdeploy demo stop           # Stop simulator
-satdeploy demo shell          # Shell into the satellite
+satdeploy demo           # Set up throwaway git repo + local target dir
+satdeploy demo stop      # Tear down
+satdeploy demo status    # Check if the demo is set up
 ```
 
 ### Shell completion
@@ -463,7 +465,7 @@ cp build/libcsh_satdeploy_apm.so ~/.local/lib/csh/
 ## Requirements
 
 - Python 3.8+
-- Docker (for demo mode only)
+- git (for the zero-prerequisite demo, and for provenance tracking on real deploys)
 - SSH access to target (for SSH transport)
 - `satdeploy-agent` on target (for CSP transport)
 - [CSH](https://github.com/spaceinventor/csh) on ground station (for CAN/KISS transport — bridges ZMQ to physical bus)
