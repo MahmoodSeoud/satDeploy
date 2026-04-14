@@ -2,9 +2,9 @@
   <img src="docs/assets/hero.webp" alt="A DISCO-2 cubesat in orbit above Earth" width="860">
 </p>
 
-<h1 align="center">satdeploy</h1>
+<h1 align="center">satDeploy</h1>
 
-![satdeploy pushing and rolling back a local test app in 20 seconds](demo/demo.gif)
+![satDeploy pushing and rolling back a local test app in 20 seconds](demo/demo.gif)
 
 <sub><i><code>satdeploy demo</code> against a local throwaway target. Same hashing, backups, git provenance, and rollback code paths as a production deploy.</i></sub>
 
@@ -13,11 +13,11 @@ We flew [DISCO-2](https://discosat.dk/v2_disco-2/), a 3U student CubeSat, and th
 
 The payload ran a Yocto Linux image with several apps on it, each on its own release cadence, each updated the same way: rebuild locally, copy the binary over USB or SCP, and post "I updated the binary" in Slack. By launch, nobody could list every commit running on the hardware with confidence. After launch, rebuilding the same set on our flatsat took weeks of chasing memory and old tmux sessions, and we still ran into lib version mismatches we hadn't known were there.
 
-satdeploy is what we built so it doesn't happen again. Every deploy is versioned, hash-verified, and tagged with the git commit it came from. Every file can be rolled back with one command. It works over SSH for networked targets on the bench, and over [CSP](https://github.com/spaceinventor/libcsp) (CAN bus, KISS serial, ZMQ) for air-gapped satellite links.
+satDeploy is what we built so it doesn't happen again. Every deploy is versioned, hash-verified, and tagged with the git commit it came from. Every file can be rolled back with one command. It works over SSH for networked targets on the bench, and over [CSP](https://github.com/spaceinventor/libcsp) (CAN bus, KISS serial, ZMQ) for air-gapped satellite links.
 
 > DISCO-2 is a 3U student CubeSat from Aarhus University, SDU, and ITU Copenhagen, launched on [SpaceX Transporter-16](https://x.com/i/broadcasts/1kJzDMgwZAvKv) (March 30, 2026) to image Arctic glaciers from a 510 km sun-synchronous orbit. Coverage: [Danish Space News](https://danishspacenews.substack.com/p/disco-2-one-of-the-most-ambitious), [The Danish Dream](https://thedanishdream.com/danish-society/science/danish-students-launch-satellite-to-track-melting-arctic/), [project site](https://projects.au.dk/ausat/disco-2).
 
-> **Early stage, but heading to orbit.** We built satdeploy *after* DISCO-2 launched, so the current payload is flying without it. The next uplink window will push satdeploy to the DISCO-2 payload, and every deploy after that will be versioned, hash-verified, and rollback-able from the ground. Right now it runs on our flatsat, and we're actively putting it in front of other satellite teams — the more hardware it sees on the bench, the more rough edges we find and fix together before anything flies. If you run a satellite program, we'd love to see it on your flatsat. [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues/new) or reach out.
+> **Early stage, but heading to orbit.** We built satDeploy *after* DISCO-2 launched, so the current payload is flying without it. The next uplink window will push satDeploy to the DISCO-2 payload, and every deploy after that will be versioned, hash-verified, and rollback-able from the ground. Right now it runs on our flatsat, and we're actively putting it in front of other satellite teams — the more hardware it sees on the bench, the more rough edges we find and fix together before anything flies. If you run a satellite program, we'd love to see it on your flatsat. [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues/new) or reach out.
 
 ## Try it now
 
