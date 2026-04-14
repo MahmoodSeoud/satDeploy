@@ -1,4 +1,4 @@
-**Know exactly what software is running on your satellite.** Push files, track versions, rollback with one command. Works over SSH and CSP (CubeSat Space Protocol).
+**Stop SCP-ing binaries onto your flatsat.** satdeploy is one CLI for the entire CubeSat lifecycle — push over Ethernet/SSH on the bench, then over CSP/CAN/serial after launch, with versioned backups, hash verification, and one-command rollback. The same tool that ships your Tuesday afternoon code change pushes the in-orbit patch two years later.
 
 <details>
 <summary><code>satdeploy</code></summary>
