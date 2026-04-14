@@ -33,10 +33,8 @@ from satdeploy.output import (
     render_push_step,
     render_rollback_header,
     render_status_table,
-    render_target_header,
     step,
     success,
-    target_endpoint,
     warning,
 )
 from satdeploy.services import ServiceManager, ServiceStatus
@@ -1027,13 +1025,6 @@ def status(config_path: Path | None, node_override: int | None):
             module_config, config.backup_dir, apps=apps_dict_for_transport,
         )
 
-        click.echo(render_target_header(
-            name=config.module_name,
-            transport=module_config.transport,
-            endpoint=target_endpoint(module_config),
-        ))
-        click.echo("")
-
         all_app_names = list(apps.keys()) if apps else []
         module_state = history.get_module_state(config.module_name)
         adhoc_apps = [name for name in module_state
@@ -1096,12 +1087,6 @@ def status(config_path: Path | None, node_override: int | None):
 
     # SSH transport: use direct SSH connection
     target = {"host": module_config.host, "user": module_config.user}
-    click.echo(render_target_header(
-        name=config.module_name,
-        transport=module_config.transport,
-        endpoint=target_endpoint(module_config),
-    ))
-    click.echo("")
 
     ssh_all_app_names = list(apps.keys()) if apps else []
     ssh_module_state = history.get_module_state(config.module_name)
