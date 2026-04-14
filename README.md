@@ -181,9 +181,6 @@ satdeploy status
 **How the pieces connect:**
 
 ```
-Local testing (ZMQ):
-  Python CLI  -->  zmqproxy  -->  Agent (-i ZMQ)
-
 Real satellite (CAN bus):
   Python CLI  -->  CSH  -->  CAN bus  -->  Agent (-i CAN)
 
@@ -191,7 +188,7 @@ Serial link (KISS):
   Python CLI  -->  CSH  -->  serial   -->  Agent (-i KISS)
 ```
 
-`zmqproxy` is a simple ZMQ forwarder (demo/local only). For real hardware, you need [CSH](https://github.com/spaceinventor/csh) — it bridges between its ZMQ interface (where the CLI connects) and CAN or KISS interfaces (where the satellite lives).
+For real hardware you need [CSH](https://github.com/spaceinventor/csh) on the ground station — it bridges between its ZMQ interface (where the Python CLI connects) and the CAN or KISS interfaces where the satellite lives. If you just want to try the satdeploy workflow without any hardware, run `satdeploy demo` (see [Try it now](#try-it-now)).
 
 ## Ground Station (CSH)
 
@@ -291,6 +288,14 @@ satdeploy demo status    # Check if the demo is set up
 ```
 
 ### Shell completion
+
+The easy way — writes to the system completions directory (same place as `gh`, `docker`, `brew`), no rc file edit needed:
+
+```bash
+satdeploy completion --install
+```
+
+Or add it to your shell rc manually:
 
 ```bash
 # Bash — add to ~/.bashrc
