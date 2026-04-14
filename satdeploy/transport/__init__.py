@@ -9,6 +9,7 @@ from satdeploy.transport.base import (
 )
 from satdeploy.transport.ssh import SSHTransport
 from satdeploy.transport.csp import CSPTransport
+from satdeploy.transport.local import LocalTransport
 
 __all__ = [
     "Transport",
@@ -18,4 +19,5 @@ __all__ = [
     "BackupInfo",
     "SSHTransport",
     "CSPTransport",
+    "LocalTransport",
 ]

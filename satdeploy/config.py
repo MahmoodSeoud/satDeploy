@@ -11,17 +11,22 @@ import yaml
 class ModuleConfig:
     """Configuration for a deployment target module.
 
-    Supports two transport types:
-    - "ssh": Traditional SSH/SFTP (requires host, user)
-    - "csp": CSP/DTP over ZMQ (requires zmq_endpoint, agent_node)
+    Supports three transport types:
+    - "ssh":   Traditional SSH/SFTP (requires host, user)
+    - "csp":   CSP/DTP over ZMQ/CAN/KISS (requires zmq_endpoint, agent_node)
+    - "local": Local filesystem target (requires target_dir) — used by
+               `satdeploy demo` and for deploying to chroots/mounted rootfs
     """
 
     name: str
-    transport: str  # "ssh" or "csp"
+    transport: str  # "ssh", "csp", or "local"
 
     # SSH transport fields
     host: Optional[str] = None
     user: Optional[str] = None
+
+    # Local transport fields
+    target_dir: Optional[str] = None
 
     # CSP transport fields
     zmq_endpoint: Optional[str] = None
@@ -170,6 +175,9 @@ class Config:
                 errors.append("zmq_endpoint")
             if "agent_node" not in data:
                 errors.append("agent_node")
+        elif transport == "local":
+            if "target_dir" not in data:
+                errors.append("target_dir")
         else:
             errors.append(f"unknown transport: {transport}")
 
@@ -208,6 +216,8 @@ class Config:
             # SSH fields
             host=self._data.get("host"),
             user=self._data.get("user"),
+            # Local transport fields
+            target_dir=self._data.get("target_dir"),
             # CSP fields
             zmq_endpoint=self._data.get("zmq_endpoint"),
             agent_node=self._data.get("agent_node"),

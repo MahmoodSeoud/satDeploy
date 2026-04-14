@@ -18,7 +18,7 @@ from satdeploy.output import success, warning, step, SYMBOLS, SatDeployError, Co
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 from satdeploy.templates import render_service_template, compute_service_hash
-from satdeploy.transport import Transport, SSHTransport, CSPTransport, TransportError
+from satdeploy.transport import Transport, SSHTransport, CSPTransport, LocalTransport, TransportError
 from satdeploy import demo as demo_module
 
 
@@ -58,6 +58,12 @@ def get_transport(
             dtp_mtu=module.dtp_mtu,
             dtp_throughput=module.dtp_throughput,
             dtp_timeout=module.dtp_timeout,
+        )
+    elif module.transport == "local":
+        return LocalTransport(
+            target_dir=module.target_dir or "",
+            backup_dir=backup_dir,
+            apps=apps,
         )
     else:
         raise ValueError(f"Unknown transport type: {module.transport}")
@@ -669,10 +675,18 @@ def push(
 
     history = get_history(config.history_path)
 
-    # CSP transport: use transport abstraction
-    if module_config.transport == "csp":
-        transport = get_transport(module_config, config.backup_dir)
-        click.echo(f"Connecting to {module_config.zmq_endpoint}...")
+    # CSP and local transports: use transport abstraction
+    if module_config.transport in ("csp", "local"):
+        # Local transport needs the apps dict so it knows where to back up to
+        apps_dict_for_transport = {
+            name: {"remote": cfg.get("remote", ""), "service": cfg.get("service")}
+            for name, cfg in config.apps.items()
+        } if module_config.transport == "local" and config.apps else None
+        transport = get_transport(
+            module_config, config.backup_dir, apps=apps_dict_for_transport,
+        )
+        if module_config.transport == "csp":
+            click.echo(f"Connecting to {module_config.zmq_endpoint}...")
 
         try:
             transport.connect()
@@ -693,18 +707,23 @@ def push(
                     if bytes_sent >= total:
                         click.echo()  # newline when done
 
-                click.echo(f"Deploying {app} via CSP ({file_size} bytes)...")
+                if module_config.transport == "csp":
+                    click.echo(f"Deploying {app} via CSP ({file_size} bytes)...")
 
-                result = transport.deploy(
+                deploy_kwargs = dict(
                     app_name=app,
                     local_path=local_path,
                     remote_path=remote_path,
-                    param_name=app_config.param,
-                    appsys_node=module_config.appsys_node,
-                    run_node=module_config.get_run_node(app),
                     force=force,
-                    on_progress=_show_progress,
                 )
+                if module_config.transport == "csp":
+                    deploy_kwargs.update(
+                        param_name=app_config.param,
+                        appsys_node=module_config.appsys_node,
+                        run_node=module_config.get_run_node(app),
+                        on_progress=_show_progress,
+                    )
+                result = transport.deploy(**deploy_kwargs)
 
                 if result.success:
                     # Compute local hash for history
@@ -887,10 +906,19 @@ def status(config_path: Path | None, node_override: int | None):
     apps = config.apps
     history = get_history(config.history_path)
 
-    # CSP transport: use transport abstraction
-    if module_config.transport == "csp":
-        transport = get_transport(module_config, config.backup_dir)
-        click.echo(f"Target: node {module_config.agent_node}")
+    # CSP and local transports: use transport abstraction
+    if module_config.transport in ("csp", "local"):
+        apps_dict_for_transport = {
+            name: {"remote": cfg.get("remote", ""), "service": cfg.get("service")}
+            for name, cfg in config.apps.items()
+        } if module_config.transport == "local" and config.apps else None
+        transport = get_transport(
+            module_config, config.backup_dir, apps=apps_dict_for_transport,
+        )
+        if module_config.transport == "csp":
+            click.echo(f"Target: node {module_config.agent_node}")
+        else:
+            click.echo(f"Target: {module_config.target_dir}")
         click.echo("")
 
         # Collect all app names: configured + any ad-hoc from history
@@ -916,6 +944,12 @@ def status(config_path: Path | None, node_override: int | None):
             for app_name in all_app_names + adhoc_apps:
                 app_status = app_statuses.get(app_name)
 
+                # Provenance map keyed by file_hash — lets status show the
+                # original git commit for the file currently on target, even
+                # after a rollback (rollback records don't carry git_hash,
+                # but the push that originally introduced this hash does).
+                app_prov_map = build_provenance_map(history, app_name)
+
                 if app_status:
                     hash_display = app_status.file_hash or "-"
                     remote_path = app_status.remote_path or ""
@@ -928,9 +962,7 @@ def status(config_path: Path | None, node_override: int | None):
                         status_text = "deployed"
                         status_color = "green"
 
-                    # Get git provenance from history
-                    last_deploy = history.get_last_deployment(app_name)
-                    git_prov = last_deploy.git_hash if last_deploy and last_deploy.success else None
+                    git_prov = app_prov_map.get(hash_display)
                 else:
                     # Not in agent status — check history for previous deploys
                     last_deploy = module_state.get(app_name)
@@ -940,7 +972,7 @@ def status(config_path: Path | None, node_override: int | None):
                         status_color = "bright_black"
                         hash_display = last_deploy.file_hash or "-"
                         remote_path = last_deploy.remote_path or ""
-                        git_prov = last_deploy.git_hash
+                        git_prov = app_prov_map.get(hash_display) or last_deploy.git_hash
                     else:
                         symbol = click.style(SYMBOLS["bullet"], fg="yellow")
                         status_text = "not deployed"
@@ -1085,10 +1117,15 @@ def list_backups(app: str, config_path: Path | None, node_override: int | None):
     # Get currently deployed version from history
     last_deploy = history.get_last_deployment(app)
 
-    # CSP transport: use transport abstraction
-    # No app config needed — the agent discovers apps dynamically
-    if module_config.transport == "csp":
-        transport = get_transport(module_config, config.backup_dir)
+    # CSP and local transports: use transport abstraction
+    if module_config.transport in ("csp", "local"):
+        apps_dict_for_transport = {
+            name: {"remote": cfg.get("remote", ""), "service": cfg.get("service")}
+            for name, cfg in config.apps.items()
+        } if module_config.transport == "local" and config.apps else None
+        transport = get_transport(
+            module_config, config.backup_dir, apps=apps_dict_for_transport,
+        )
 
         try:
             transport.connect()
@@ -1264,16 +1301,25 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
     history = get_history(config.history_path)
     backup_path = None
 
-    # CSP transport: use transport abstraction
-    # No app config needed — the agent handles rollback internally
-    if module_config.transport == "csp":
-        transport = get_transport(module_config, config.backup_dir)
-        click.echo(f"Connecting to {module_config.zmq_endpoint}...")
+    # CSP and local transports: use transport abstraction
+    if module_config.transport in ("csp", "local"):
+        apps_dict_for_transport = {
+            name: {"remote": cfg.get("remote", ""), "service": cfg.get("service")}
+            for name, cfg in config.apps.items()
+        } if module_config.transport == "local" and config.apps else None
+        transport = get_transport(
+            module_config, config.backup_dir, apps=apps_dict_for_transport,
+        )
+        if module_config.transport == "csp":
+            click.echo(f"Connecting to {module_config.zmq_endpoint}...")
 
         try:
             transport.connect()
 
-            click.echo(f"Rolling back {app} via CSP...")
+            if module_config.transport == "csp":
+                click.echo(f"Rolling back {app} via CSP...")
+            else:
+                click.echo(f"Rolling back {app}...")
             result = transport.rollback(
                 app_name=app,
                 backup_hash=target_hash,
@@ -1535,22 +1581,28 @@ def logs(app: str, lines: int, config_path: Path | None, node_override: int | No
         transport.disconnect()
 
 
-@main.group(cls=ColoredGroup)
-def demo():
-    """Manage the demo environment (simulated satellite)."""
-    pass
+@main.group(cls=ColoredGroup, invoke_without_command=True)
+@click.pass_context
+def demo(ctx: click.Context):
+    """Set up a zero-prerequisite demo environment.
+
+    Running `satdeploy demo` with no subcommand is equivalent to
+    `satdeploy demo start` — it's the fastest path to trying satdeploy.
+    """
+    if ctx.invoked_subcommand is None:
+        demo_module.demo_start()
 
 
 @demo.command()
 def start():
-    """Start a simulated satellite for trying satdeploy."""
+    """Set up the demo environment (throwaway git repo + local target)."""
     demo_module.demo_start()
 
 
 @demo.command()
-@click.option("--clean", is_flag=True, help="Remove demo config directory")
+@click.option("--clean", is_flag=True, help="Remove all demo files")
 def stop(clean: bool):
-    """Stop the demo environment."""
+    """Tear down the demo environment."""
     demo_module.demo_stop(clean=clean)
 
 
@@ -1558,11 +1610,5 @@ def stop(clean: bool):
 def demo_status_cmd():
     """Show demo environment status."""
     demo_module.demo_status()
-
-
-@demo.command()
-def shell():
-    """Open an interactive shell on the simulated satellite."""
-    demo_module.demo_shell()
 
 
