@@ -175,7 +175,7 @@ static int send_deploy_request(unsigned int node, Satdeploy__DeployRequest *req,
     int resp_len = csp_transaction_w_opts(CSP_PRIO_NORM, node, SATDEPLOY_PORT,
                                           DEFAULT_TIMEOUT, req_buf, req_size,
                                           resp_buf, -1,  /* -1 = unknown reply size */
-                                          CSP_O_CRC32);
+                                          0);
     free(req_buf);
 
     if (resp_len <= 0) {
