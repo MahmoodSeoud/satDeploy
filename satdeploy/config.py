@@ -33,8 +33,6 @@ class ModuleConfig:
     agent_node: Optional[int] = None
     appsys_node: Optional[int] = None
     ground_node: int = 40  # Default ground station node address
-    zmq_pub_port: int = 9600  # zmqproxy subscribe port (TX)
-    zmq_sub_port: int = 9601  # zmqproxy publish port (RX)
 
     # DTP transfer tuning
     dtp_mtu: int = 1024        # Max transmission unit (bytes)
@@ -223,8 +221,6 @@ class Config:
             agent_node=self._data.get("agent_node"),
             appsys_node=self._data.get("appsys_node"),
             ground_node=self._data.get("ground_node", 40),
-            zmq_pub_port=self._data.get("zmq_pub_port", 9600),
-            zmq_sub_port=self._data.get("zmq_sub_port", 9601),
             # Common fields
             csp_addr=self._data.get("csp_addr", 0),
             netmask=appsys.get("netmask", 0),

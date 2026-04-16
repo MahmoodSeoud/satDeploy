@@ -75,8 +75,6 @@ def get_transport(
             agent_node=module.agent_node,
             ground_node=module.ground_node,
             backup_dir=backup_dir,
-            zmq_pub_port=module.zmq_pub_port,
-            zmq_sub_port=module.zmq_sub_port,
             dtp_mtu=module.dtp_mtu,
             dtp_throughput=module.dtp_throughput,
             dtp_timeout=module.dtp_timeout,

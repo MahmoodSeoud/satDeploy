@@ -14,11 +14,11 @@ dependencies = [
     "click>=8.0",
     "paramiko>=3.0",
     "pyyaml>=6.0",
-    "pyzmq>=25.0",
     "protobuf>=4.0",
 ]
 
 [project.optional-dependencies]
+csp = ["libcsp-py3>=2.2.0"]
 dev = [
     "pytest>=7.0",
     "pytest-mock>=3.0",
