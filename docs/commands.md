@@ -1,6 +1,6 @@
 # Command Reference
 
-The Python CLI and CSH APM share the same command interface. Every flag works in both.
+The Python CLI handles SSH deployments. The CSH APM handles CSP deployments. Both provide the same five commands (`push`, `status`, `list`, `rollback`, `logs`) and write to the same history database.
 
 ## push: Deploy files to target
 

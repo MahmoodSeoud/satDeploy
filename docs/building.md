@@ -4,9 +4,9 @@
 
 | Component | Language | Runs on | Purpose |
 |-----------|----------|---------|---------|
-| `satdeploy` | Python | Ground station | CLI, architecture-independent |
+| `satdeploy` | Python | Ground station | CLI for SSH deployments |
 | `satdeploy-agent` | C | Target | Handles CSP deploy commands via [libcsp](https://github.com/spaceinventor/libcsp). Must be cross-compiled for the target architecture. |
-| `satdeploy-apm` | C | Ground station | Slash commands for [CSH](https://github.com/spaceinventor/csh). Compiled natively. |
+| `satdeploy-apm` | C | Ground station | CSP deployment commands for [CSH](https://github.com/spaceinventor/csh). Compiled natively. |
 
 ## Python CLI (development)
 

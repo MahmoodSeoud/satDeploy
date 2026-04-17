@@ -47,9 +47,9 @@ apps:
 
 ## Transports
 
-### SSH
+### SSH (Python CLI)
 
-Direct SSH/SFTP connection. Works with any Linux target.
+Direct SSH/SFTP connection via the `satdeploy` Python CLI. Works with any Linux target.
 
 ```yaml
 name: flatsat
@@ -58,9 +58,9 @@ host: 192.168.1.50
 user: root
 ```
 
-### CSP
+### CSP (CSH APM)
 
-[CubeSat Space Protocol](https://github.com/spaceinventor/libcsp) over ZMQ, CAN, or KISS serial. Requires `satdeploy-agent` on the target.
+[CubeSat Space Protocol](https://github.com/spaceinventor/libcsp) over ZMQ, CAN, or KISS serial. Requires `satdeploy-agent` on the target and `satdeploy-apm` loaded in CSH on the ground station.
 
 ```yaml
 name: satellite
@@ -69,6 +69,8 @@ zmq_endpoint: tcp://localhost:9600
 agent_node: 5425
 ground_node: 40
 ```
+
+> **Note:** CSP configs are used by the CSH APM, not the Python CLI. If you set `transport: csp` and run the Python CLI, it will tell you to use CSH instead.
 
 ## Dependency resolution
 

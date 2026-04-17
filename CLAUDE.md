@@ -56,14 +56,14 @@ python -m pytest
 
 ## Architecture
 
-### Transport Abstraction
+### Transport Boundary
 
-The CLI uses a transport layer (`satdeploy/transport/`) supporting:
+Each transport is handled by a dedicated tool:
 
-- **SSH** (`ssh.py`) - Traditional SSH/SFTP for direct network access
-- **CSP** (`csp.py`) - Cubesat Space Protocol over ZMQ for satellite links
+- **SSH** - Python CLI (`satdeploy`). Traditional SSH/SFTP for direct network access.
+- **CSP** - C APM (`satdeploy-apm`). Cubesat Space Protocol via CSH slash commands.
 
-Both implement the same interface: `deploy()`, `rollback()`, `get_status()`, `list_backups()`, `verify()`.
+Both tools write to the same `~/.satdeploy/history.db` (SQLite, WAL mode) so `satdeploy status` shows a unified view across transports.
 
 ### Python Modules
 
@@ -73,13 +73,11 @@ Both implement the same interface: `deploy()`, `rollback()`, `get_status()`, `li
 | `config.py` | YAML config loading, per-target flat format |
 | `transport/base.py` | Abstract transport interface |
 | `transport/ssh.py` | SSH/SFTP implementation |
-| `transport/csp.py` | CSP/DTP implementation |
 | `deployer.py` | Backup creation, file upload, hash verification |
 | `services.py` | systemd service management |
 | `dependencies.py` | Topological sort for service ordering |
-| `history.py` | SQLite deployment tracking |
+| `history.py` | SQLite deployment tracking (shared with APM) |
 | `output.py` | CLI formatting (colors, symbols, steps) |
-| `csp/dtp_server.py` | DTP server for serving files to satellite |
 
 ### satdeploy-agent (C)
 
@@ -161,21 +159,22 @@ The `name` field identifies this target in history records (defaults to `"defaul
 
 ## Deployment Flow
 
-### SSH Transport
+### SSH (Python CLI)
 1. Stop services (dependents first)
 2. Backup current file to `{backup_dir}/{app}/{timestamp}-{hash}.bak`
 3. Upload via SFTP
 4. Start services (dependencies first)
 5. Health check
-6. Record to history.db
+6. Record to history.db (transport="ssh")
 
-### CSP Transport
-1. Send DEPLOY command to agent (port 20)
+### CSP (APM via CSH)
+1. APM sends DEPLOY command to agent (port 20)
 2. Agent stops app via libparam
 3. Agent backs up current file
 4. Agent downloads new file via DTP from ground
 5. Agent verifies checksum
 6. Agent starts app via libparam
+7. APM records to history.db (transport="csp")
 
 ## Dependency Resolution
 
