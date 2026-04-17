@@ -1,0 +1,61 @@
+name: Publish libcsp-py3 wheels
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:  # builds only, does not publish
+
+jobs:
+  build-wheels:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve symlinks for CI build
+        run: |
+          rm -f libcsp-py3/subprojects/csp
+          cp -r satdeploy-agent/lib/csp libcsp-py3/subprojects/csp
+
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel
+
+      - name: Build wheels
+        run: cibuildwheel --output-dir wheelhouse
+        working-directory: libcsp-py3
+        env:
+          CIBW_BUILD: "cp39-manylinux_x86_64 cp310-manylinux_x86_64 cp311-manylinux_x86_64 cp312-manylinux_x86_64"
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_BEFORE_ALL_LINUX: "yum install -y epel-release && yum install -y zeromq-devel"
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel}"
+          CIBW_TEST_COMMAND: "python -c \"import libcsp_py3; assert hasattr(libcsp_py3, 'zmqhub_init'), 'ZMQ support not compiled in'\""
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libcsp-py3-wheels
+          path: libcsp-py3/wheelhouse/*.whl
+
+  publish:
+    if: github.event_name == 'release' && startsWith(github.ref_name, 'libcsp-')
+    needs: build-wheels
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: libcsp-py3-wheels
+          path: wheelhouse/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: wheelhouse/
+          verbose: true

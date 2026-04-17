@@ -6,6 +6,7 @@ on:
 
 jobs:
   publish:
+    if: startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # Trusted publisher — no API token needed
