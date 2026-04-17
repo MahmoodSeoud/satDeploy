@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "satdeploy"
 version = "0.3.13"
-description = "Deployment tool for embedded Linux satellites — push, track, rollback over SSH and CSP"
+description = "Deployment tool for embedded Linux satellites — push, track, rollback over SSH"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Mahmood Seoud"}]
@@ -14,8 +14,6 @@ dependencies = [
     "click>=8.0",
     "paramiko>=3.0",
     "pyyaml>=6.0",
-    "pyzmq>=25.0",
-    "protobuf>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -37,5 +35,5 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 markers = [
-    "integration: tests requiring running demo environment (Docker + zmqproxy + agent)",
+    "integration: tests requiring running demo environment",
 ]

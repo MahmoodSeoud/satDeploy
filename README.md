@@ -72,13 +72,13 @@ satdeploy rollback controller        # undo
 satdeploy logs controller            # service logs
 ```
 
-### CSP (air-gapped target, CAN/serial, experimental)
+### CSP (air-gapped target, CAN/serial)
 
-The CSP path has more moving parts. You need three pieces running:
+For air-gapped targets reachable only over CSP (CAN bus, KISS serial, ZMQ), use the **satdeploy-apm** C module inside [CSH](https://github.com/spaceinventor/csh). The Python CLI handles SSH only. CSP networking is handled natively in C by the APM, which talks directly to `satdeploy-agent` on the target.
 
 | Piece | Where it runs | How to get it |
 |-------|---------------|---------------|
-| Python CLI *or* CSH APM | Ground station | `pip install satdeploy` or [build the APM](docs/building.md#satdeploy-apm-ground-station-native) |
+| **satdeploy-apm** | Ground station (inside CSH) | [Build the APM](docs/building.md#satdeploy-apm-ground-station-native) |
 | `satdeploy-agent` | Target satellite | [Yocto recipe or cross-compile](docs/building.md#satdeploy-agent-target-cross-compiled) |
 | [CSH](https://github.com/spaceinventor/csh) | Ground station | Bridges ZMQ ↔ CAN/serial |
 
@@ -90,21 +90,15 @@ satdeploy-agent -i KISS -p /dev/ttyS1     # Serial link
 satdeploy-agent -i ZMQ  -p localhost      # ZMQ (local testing only)
 ```
 
-On the ground station, `satdeploy init` (select "csp") gives you a config like:
+From CSH on the ground station:
 
-```yaml
-name: my-satellite
-transport: csp
-zmq_endpoint: tcp://localhost:9600       # CSH's ZMQ address
-agent_node: 55                           # your satellite's CSP node ID
-ground_node: 40                          # your ground station's CSP node ID
-apps:
-  controller:
-    local: ./build/controller
-    remote: /opt/bin/controller
+```
+satdeploy push controller
+satdeploy status
+satdeploy rollback controller
 ```
 
-Then `satdeploy push controller` works the same as SSH.
+Both the Python CLI (SSH deploys) and the APM (CSP deploys) write to the same `history.db`, so `satdeploy status` shows a unified view regardless of transport.
 
 If you just want to see the workflow without any of this, use `satdeploy demo`.
 
@@ -119,7 +113,7 @@ If you just want to see the workflow without any of this, use `satdeploy demo`.
 - Python 3.8+
 - git (for the demo, and for provenance tracking on real deploys)
 - SSH access to target *(SSH transport)*
-- `satdeploy-agent` on target + [CSH](https://github.com/spaceinventor/csh) on ground station *(CSP transport)*
+- `satdeploy-agent` on target + `satdeploy-apm` + [CSH](https://github.com/spaceinventor/csh) on ground station *(CSP transport)*
 - systemd on target
 
 ## License

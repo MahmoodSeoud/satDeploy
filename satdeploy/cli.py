@@ -40,7 +40,7 @@ from satdeploy.output import (
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 from satdeploy.templates import render_service_template, compute_service_hash
-from satdeploy.transport import Transport, SSHTransport, CSPTransport, LocalTransport, TransportError
+from satdeploy.transport import Transport, SSHTransport, LocalTransport, TransportError
 from satdeploy import demo as demo_module
 
 
@@ -70,16 +70,10 @@ def get_transport(
             apps=apps,
         )
     elif module.transport == "csp":
-        return CSPTransport(
-            zmq_endpoint=module.zmq_endpoint,
-            agent_node=module.agent_node,
-            ground_node=module.ground_node,
-            backup_dir=backup_dir,
-            zmq_pub_port=module.zmq_pub_port,
-            zmq_sub_port=module.zmq_sub_port,
-            dtp_mtu=module.dtp_mtu,
-            dtp_throughput=module.dtp_throughput,
-            dtp_timeout=module.dtp_timeout,
+        raise ValueError(
+            "CSP transport requires CSH + satdeploy-apm (the C ground station module). "
+            "The Python CLI supports SSH and local transports only. "
+            "See: https://github.com/MahmoodSeoud/satDeploy#csp-air-gapped-target"
         )
     elif module.transport == "local":
         return LocalTransport(

@@ -9,7 +9,7 @@ import pytest
 from click.testing import CliRunner
 
 from satdeploy.config import ModuleConfig, Config
-from satdeploy.transport import SSHTransport, CSPTransport
+from satdeploy.transport import SSHTransport
 from satdeploy.transport.base import DeployResult
 from satdeploy.cli import get_transport, main
 
@@ -33,8 +33,8 @@ class TestGetTransport:
         assert transport.host == "192.168.1.10"
         assert transport.user == "root"
 
-    def test_get_transport_returns_csp_for_csp_module(self):
-        """get_transport returns CSPTransport for CSP modules."""
+    def test_get_transport_raises_for_csp_module(self):
+        """get_transport raises ValueError for CSP modules (CSP requires APM)."""
         module = ModuleConfig(
             name="som1-csp",
             transport="csp",
@@ -44,11 +44,8 @@ class TestGetTransport:
         )
         backup_dir = "/opt/satdeploy/backups"
 
-        transport = get_transport(module, backup_dir)
-
-        assert isinstance(transport, CSPTransport)
-        assert transport.zmq_endpoint == "tcp://localhost:4040"
-        assert transport.agent_node == 5424
+        with pytest.raises(ValueError, match="CSP transport requires CSH"):
+            get_transport(module, backup_dir)
 
     def test_get_transport_raises_for_unknown_transport(self):
         """get_transport raises error for unknown transport type."""
