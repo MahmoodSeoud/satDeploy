@@ -1,5 +1,6 @@
 """History database for tracking deployments."""
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -155,7 +156,10 @@ class History:
                 1 if record.vmem_cleared else 0,
                 record.provenance_source,
                 record.transport or "ssh",
-                record.source or "cli",
+                # Env-var fallback lets the dashboard shell out to the existing
+                # CLI rollback path while tagging the audit row as web-initiated,
+                # without threading an extra arg through every record() call site.
+                record.source or os.environ.get("SATDEPLOY_SOURCE", "cli"),
             ),
         )
         conn.commit()

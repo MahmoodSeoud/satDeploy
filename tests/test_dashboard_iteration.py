@@ -69,8 +69,9 @@ def test_iteration_happy_path_renders_all_fields(make_app):
     assert "2026-04-20T09:00:00" in body
     assert "diff --git" in body
     assert "deployed" in body
-    # Rollback button is a disabled placeholder in the read-only commit.
-    assert "disabled" in body
+    # Happy path = this iteration is still the live version, so no rollback button.
+    assert "already live" in body
+    assert "rollback-trigger" not in body
 
 
 def test_iteration_no_git_hash_shows_placeholder(make_app):

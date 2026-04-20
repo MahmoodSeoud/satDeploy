@@ -8,7 +8,10 @@ env-var setup.
 
 from __future__ import annotations
 
+import hmac as hmac_mod
 import os
+import subprocess
+import sys
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -184,6 +187,92 @@ def create_app(
                 "confirm_string": confirm_string,
             },
         )
+
+    @app.post("/api/rollback")
+    @limiter.limit("1/second")
+    async def rollback_endpoint(request: Request,
+                                 x_satdeploy_token: Optional[str] = Header(default=None)):
+        # Layer 1: shared-secret header. Constant-time to avoid timing attacks.
+        if not x_satdeploy_token or not hmac_mod.compare_digest(
+            x_satdeploy_token.encode(), secret.encode()
+        ):
+            raise HTTPException(status_code=403, detail="invalid or missing X-Satdeploy-Token")
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="request body must be JSON")
+
+        file_hash = body.get("file_hash")
+        hmac_token = body.get("token")
+        confirm_str = body.get("confirm")
+        if not (file_hash and hmac_token and confirm_str):
+            raise HTTPException(
+                status_code=400,
+                detail="missing required fields: file_hash, token, confirm",
+            )
+
+        # Layer 2: hash-scoped HMAC with time-bucket expiry. Defends against a
+        # leaked secret being used to roll back an iteration the attacker never
+        # visited a page for.
+        if not security.verify_rollback(secret, file_hash, hmac_token):
+            raise HTTPException(
+                status_code=403,
+                detail="stale or invalid HMAC token (refresh the iteration page)",
+            )
+
+        rows = _fetch_iteration_rows(db_path, file_hash)
+        if not rows:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no iteration with file_hash={file_hash!r}",
+            )
+        primary = rows[0]
+
+        # Layer 3: the exact confirm string the user typed in the modal. Even
+        # with both tokens, a scripted attacker has to know app@target@hash.
+        expected_confirm = security.expected_confirm_string(
+            primary["app"], primary["module"], file_hash
+        )
+        if confirm_str.strip() != expected_confirm:
+            raise HTTPException(
+                status_code=400,
+                detail=f"confirmation mismatch; expected {expected_confirm!r}",
+            )
+
+        # Shell out to the existing CLI rollback. SATDEPLOY_SOURCE=web makes
+        # History.record() write source="web" on the audit row so the iteration
+        # timeline distinguishes browser-initiated from CLI-initiated actions.
+        cmd = [sys.executable, "-m", "satdeploy", "rollback",
+               primary["app"], file_hash]
+        if config_path:
+            cmd.extend(["--config", str(config_path)])
+
+        subprocess_env = {**os.environ, "SATDEPLOY_SOURCE": "web"}
+        try:
+            proc = subprocess.run(
+                cmd,
+                env=subprocess_env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            return JSONResponse(
+                status_code=504,
+                content={"ok": False, "error": "rollback timed out after 60s"},
+            )
+
+        if proc.returncode != 0:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "ok": False,
+                    "error": (proc.stderr.strip() or "rollback failed")[:2000],
+                },
+            )
+
+        return {"ok": True, "redirect": f"/iterations/{file_hash}"}
 
     @app.get("/healthz")
     def healthz():
