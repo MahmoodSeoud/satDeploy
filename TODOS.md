@@ -154,6 +154,140 @@ positional args so `satdeploy deploy test_app -f /tmp/binary` and
 `/opt/satdeploy/backups/<app>/YYYYMMDD-HHMMSS-<hash>.bak` could approach
 256 bytes with long app names or deep backup directories.
 
+## Refactor `push` command to `satdeploy/push.py` module
+
+**What:** Extract the 404-LOC `push` command body from `satdeploy/cli.py` into `satdeploy/push.py`. Leave the Click decorator + arg parsing in cli.py; call `push.run_push(ctx)` for the business logic. Mirrors the Phase 0 pattern for iterate/watch/validate.
+
+**Why:** cli.py is 1602 LOC. Push alone is 404 LOC of inline business logic. Phase 0 establishes the clean "Click dispatches thin, modules do business logic" pattern. push is the only remaining old-style inline command. Without this refactor, new contributors see inconsistent patterns (iterate.py is clean, push inline) and future command additions get pulled toward the wrong model.
+
+**Context:** `push` at `cli.py:599-1001`. Reads config, runs Deployer, handles backup, rollback fallback, service management, history logging, dependency resolution, git provenance, and CSP node override. Extracting requires: move functions `stop_services`, `start_services`, `sync_service_file` (if push-specific) or keep them as shared helpers. Preserve all tests in `tests/test_cli_push.py` — they pass through Click runner.
+
+**Effort:** M (human: 1-2 days / CC: ~1-2h with careful test preservation)
+
+**Priority:** P2 — cleanup, not blocking product work
+
+**Depends on:** Phase 0 shipped. iterate/watch/validate modules exist as reference pattern.
+
+## Multi-target / Fleet primitive (Phase 1, post-thesis)
+
+**What:** Parallel `iterate` across N targets, fleet dashboard tab showing app version per target, comparative status view.
+
+**Why:** Every commercial sat operator is or wants to be a constellation. Single-target satdeploy feels dated within 18 months. Doubles pilot value prop (`manages your constellation`). CEO plan rescope (2026-04-18) deferred this from Phase 0 to keep thesis timeline viable.
+
+**Context:** `--config` flag already partial for target switching. New work: multi-config loader, parallel orchestration (asyncio), fleet dashboard view, comparative status (sat-1 is v2, sat-2 is v1). Simulation for local dev: 2 local ZMQ agents bound to different ports.
+
+**Effort:** L (CC: ~4-6 days)
+
+**Priority:** P1 — biggest pilot value-add once thesis ships
+
+**Depends on:** Phase 0 shipped.
+
+## Drone outreach collateral (Phase 1, post-thesis)
+
+**What:** Drone-targeted cold-email script variant, drone company email list (~10 shops: Auterion, PX4 commercial, Brinc, Shield AI, Skydio enterprise, etc.), drone-framing demo copy.
+
+**Why:** Drones run aarch64 Linux on constrained/lossy links. SSH transport already built in satdeploy. Natural TAM expansion. CEO plan rescope (2026-04-18) deferred from Phase 1b to post-thesis per adversarial reviewer (burns Week 1-2 attention during feasibility test).
+
+**Context:** Same satdeploy binary, different positioning. Demo gif framing changes: "for your drone fleet" instead of "for your flatsat."
+
+**Effort:** S (CC: ~1-2 days)
+
+**Priority:** P1 — doubles paying customer count once thesis and first sat pilot are in hand
+
+**Depends on:** Thesis submitted, first sat pilot case study ready.
+
+## satdeploy doctor (dependency check)
+
+**What:** `satdeploy doctor` command that checks all shell-out dependencies (bsdiff, bspatch, gdbserver, debuginfod, objdump, rsync) are installed and version-compatible. Prints install hints per platform.
+
+**Why:** Phase 0 adds 4-5 shell-outs which creates dependency-fragility surface. When first pilot installs satdeploy and one dependency is missing/old, cryptic shell failure is worse than typed error with install command. Surfaced in CEO review Section 10 (2026-04-18).
+
+**Context:** Each dependency is called via `subprocess`. Centralize version/path detection in one module. Output like `apt install gdb-multiarch elfutils bsdiff`. Exit codes: 0 all good, 1 missing deps, 2 version issues.
+
+**Effort:** S (CC: ~30-45 min)
+
+**Priority:** P2 — reduces pilot onboarding friction
+
+**Depends on:** Phase 0 shell-outs (bsdiff, debuginfod, etc.) shipped.
+
+## Cloud-hosted dashboard tier (Phase 1 SaaS)
+
+**What:** `dash.satdeploy.com` — hosted FastAPI dashboard with per-org auth, billing, fleet aggregation across customers. Opt-in via `satdeploy dashboard deploy cloud`.
+
+**Why:** Expo/Codemagic business model — open dev tool + hosted SaaS tier. YC pitch requires a recurring-revenue story. CEO plan rescope (2026-04-18) kept Phase 0 local-only to avoid pilot compliance reviews; cloud tier is Phase 1.
+
+**Context:** Auth (OAuth / API keys), billing (Stripe), DPA for EU customers, hosting (Fly/Render), data egress posture for sat customers (opt-in only, never default). Sensitive: some pilot customers will refuse to pipe flatsat data to third-party cloud.
+
+**Effort:** L (CC: ~10 days)
+
+**Priority:** P1 — business model foundation
+
+**Depends on:** Phase 0 local dashboard shipped + 1 pilot converted to paid.
+
+## Telemetry backchannel (Phase 1 retention hook)
+
+**What:** Target-side daemon collects process RSS, CPU %, service up/down, last log line. Reports via CSP every N seconds. Dashboard shows live metrics per app per target. New history.db table: `telemetry`.
+
+**Why:** Once deploys are fast (wedge), ops visibility becomes the next pain (stick). Differentiates satdeploy from pure deploy tools. Foundation for Phase 3 fleet observability. CEO plan (2026-04-18) deferred from Phase 0.
+
+**Context:** Daemon in C on target, Python ingestion into history.db, dashboard live-update view. CSP protocol addition (new message type). Schema migration.
+
+**Effort:** L (CC: ~5-7 days)
+
+**Priority:** P2 — Phase 1 retention
+
+**Depends on:** Phase 0 shipped + pilot customer explicitly requests it.
+
+## satdeploy whoami (state legibility)
+
+**What:** `satdeploy whoami` — one command that shows which flatsat is connected, what's deployed, last iterate timestamp, debug status. State legibility in 1 second.
+
+**Why:** New dev installs satdeploy, wants to sanity check. `whoami` answers "am I connected?" / "what's deployed?" / "what's latest?" in one invocation. Delight item from CEO review (2026-04-18).
+
+**Effort:** S (CC: ~30 min)
+
+**Priority:** P3 — delight, can slip to Phase 1
+
+**Depends on:** Phase 0 CLI foundations.
+
+## Sysroot auto-fetch from build-artifact URL (UX polish)
+
+**What:** Instead of requiring user to set `SATDEPLOY_SDK` env var, `satdeploy iterate` detects ABI mismatch, reads Yocto manifest hash from target, fetches matching SDK tarball from build-artifact URL, extracts to `~/.satdeploy/sysroots/<hash>/`.
+
+**Why:** Phase 0 requires user to have local SDK matching target build. Manual. Phase 1 UX goal: zero-config onboarding per WOW principle #1.
+
+**Context:** Build artifact URL must be set in config (`build_artifact_base:`). Yocto manifest hash already embedded in target `/etc/build-id` or similar. Download + untar ~500MB SDK. Cache.
+
+**Effort:** M (CC: ~2-3 days)
+
+**Priority:** P2 — onboarding UX
+
+**Depends on:** Phase 0 sysroot sync shipped.
+
+## Exec view dashboard ("what shipped this week")
+
+**What:** Dashboard widget showing weekly deploy summary: apps deployed, validations passed/failed, rollback count, avg iterate time. Exec-legible metrics.
+
+**Why:** CTO demo-to-board moment. CEO plan (2026-04-18) cut from Phase 0 as YAGNI; Phase 1 polish.
+
+**Effort:** S (CC: ~1 day)
+
+**Priority:** P3 — polish
+
+**Depends on:** Phase 0 dashboard shipped + pilot explicitly asks.
+
+## Slack/Discord webhook on iterate
+
+**What:** Optional config key `webhook_url:` — satdeploy posts iterate events to Slack/Discord. Converts "hey did you deploy the fix?" DMs into silent group awareness.
+
+**Why:** Delight item from CEO review (2026-04-18). Team-awareness hook.
+
+**Effort:** S (CC: ~30-45 min)
+
+**Priority:** P3 — delight
+
+**Depends on:** Phase 0 shipped.
+
 ## Compliance Audit Command (`satdeploy audit`)
 
 **What:** Export deployment history as a formatted report (markdown or PDF) for compliance documentation.
@@ -174,3 +308,124 @@ and any rollback events. Consider PDF output via weasyprint or markdown for simp
 
 **Depends on:** Phase 1 community launch validation. Only build if a funded startup
 specifically asks for compliance/audit documentation.
+
+**Update 2026-04-20 (landscape revision):** Markdown-only version pulled into Phase 0
+as scope item R5 — specifically to answer the "enterprise-first legibility from day 1"
+critique from the Thiago landscape article. PDF output (weasyprint) stays deferred
+under this TODO.
+
+## DESIGN.md / design system doc
+
+**What:** Create a `DESIGN.md` at repo root capturing the satdeploy design system:
+typography (monospace font for ticker/timeline, UI font for labels), color palette
+(green/yellow/red status tiles + one accent), spacing scale, component vocabulary
+(status tile, live-activity ticker row, monospace timeline table, `<details>`
+collapsible, type-to-confirm modal), link/button patterns, responsive breakpoints.
+
+**Why:** plan-design-review (2026-04-20) flagged R6 design review passed 9/10 only
+because universal design principles + "reuse existing dashboard tiles" filled the
+gap. Future dashboard additions (Phase 1 cloud tier, telemetry preview, fleet view)
+will drift without a captured system. `/design-consultation` skill produces this.
+
+**Context:** Run `/design-consultation` after Phase 0 dashboard ships so the doc
+is written against real live components rather than imagined ones.
+
+**Effort:** S (human: ~4-6h via /design-consultation / CC: ~1-2h)
+
+**Priority:** P2 — Phase 1 foundation for design consistency as features expand
+
+**Depends on:** Phase 0 dashboard + R6 shipped (need real components to document)
+
+## `satdeploy tour` scripted walkthrough
+
+**What:** A scripted, narrated 3-minute walkthrough (`satdeploy tour`) that runs against
+a local target with zero hardware. Sets up demo, iterates a 500KB binary, runs validate,
+pushes with override (showing warn prompt), deploys, breaks something deliberately, rolls
+back, opens the dashboard. Between each step a brief terminal caption explains the pitch
+point ("this is the wedge", "this is the stick", "this is the audit trail").
+
+**Why:** The plan's platonic ideal says "CTO demos to board in 3 min." `tour` is that,
+shippable, zero-setup. Primary pitch asset alongside the 20s cold-email gif. Proposed in
+landscape revision (2026-04-20); dropped during timeline reconciliation because the 20s
+gif already handles cold reach and adding the tour would stack against a 0-slack calendar.
+
+**Context:** Wraps existing demo setup + scripted subprocess calls. Captions via
+`click.echo` with `click.pause()` between stages (or `--autoplay` flag with wall-clock
+timing for recorded demos). Different from existing `satdeploy demo` (which is just
+environment setup). Idempotent — running twice tears down cleanly first.
+
+**Effort:** S (human: ~4-6h / CC: ~1-2h)
+
+**Priority:** P2 — Phase 1 pitch asset, after first pilot explicitly asks for a
+narrated demo
+
+**Depends on:** Phase 0 iterate + push + rollback + validate + dashboard all shipped.
+
+## `satdeploy init` first-run welcome block
+
+**What:** After `satdeploy init` completes (or on first `satdeploy`-any-command run
+with an existing config), print a short "what to try next" block pointing at
+`satdeploy tour`, `satdeploy iterate`, and the dashboard URL.
+
+**Why:** First-impression leverage. Zero-config-to-first-value is what separates
+survivor-shape dev tools from ones that die in the onboarding funnel. Deferred from
+landscape revision (2026-04-20) because R4 `satdeploy tour` and R2 positioning are
+higher-leverage for the same pitch moment.
+
+**Context:** Similar pattern to `fly launch` post-run output, or `next create-app`'s
+"next steps". 3-5 lines. Not a first-run wizard — just an `echo` at the end of relevant
+commands when no history exists yet.
+
+**Effort:** XS (human: ~1h / CC: ~30min)
+
+**Priority:** P2 — Phase 1 delight
+
+**Depends on:** R4 `satdeploy tour` (to be the thing we point at)
+
+## `satdeploy feedback` command
+
+**What:** One command that opens a pre-filled GitHub issue (or mailto) with last N
+iterate events, anonymized config summary (target count, transport, backup_dir, app
+names redacted), and satdeploy version. User fills in the "what went wrong" text.
+
+**Why:** Pilot feedback loop compounds. When a mission engineer hits friction, the
+distance between "this is annoying" and "Mahmood knows about it" is a `satdeploy
+feedback` command, not a 20-minute issue-filing ceremony. Retention hook identified
+in landscape revision (2026-04-20); deferred because survival-sample-size of pilots
+is zero right now — speculative until at least one pilot is live.
+
+**Context:** Open URL via `webbrowser.open()`. Pre-fill body with triple-backtick
+diagnostics block. Never includes file hashes, hostnames, or paths — only shape
+metadata (counts, types, transport name).
+
+**Effort:** XS (human: ~2h / CC: ~15min)
+
+**Priority:** P2 — Phase 1 retention hook
+
+**Depends on:** At least one live pilot so feedback has a recipient worth calibrating
+against.
+
+## Ansible / deploy-script import command
+
+**What:** `satdeploy import <path>` — reads an existing Ansible playbook, Fabric script,
+or shell deploy script and generates a rough satdeploy config.yaml. Not a perfect
+translation — a starting point that reduces adoption friction for pilots already
+running their own ad-hoc deploy tooling.
+
+**Why:** The Thiago landscape article's "tool fatigue / consolidation wins" pattern:
+satdeploy succeeds by replacing N ad-hoc scripts, not by being the Nth tool. An import
+command says "show me what you have, I'll translate it" — friction near zero. Deferred
+from landscape revision (2026-04-20) because speculative — no pilot has said "how do
+I switch" yet, and the parser work is real (3+ incompatible input formats).
+
+**Context:** Start with Ansible-only (most common in flight-software shops). Parse
+inventory + playbook tasks matching `copy:`, `systemd:`, and `command:` patterns.
+Emit satdeploy config + a diagnostics file listing unsupported tasks the user must
+translate manually.
+
+**Effort:** M (human: ~1 week / CC: ~2-3h for Ansible-only v0)
+
+**Priority:** P2 — adoption friction reducer, only build when a pilot asks
+
+**Depends on:** At least one pilot that currently uses Ansible/scripts and is willing
+to be the reference import target.
