@@ -41,6 +41,7 @@ from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 from satdeploy.templates import render_service_template, compute_service_hash
 from satdeploy.transport import Transport, SSHTransport, LocalTransport, TransportError
+from satdeploy import audit as audit_module
 from satdeploy import debuginfod as debuginfod_module
 from satdeploy import demo as demo_module
 
@@ -1711,5 +1712,76 @@ def shutil_which_gdb() -> str | None:
     """Prefer gdb-multiarch over native gdb for ARM targets."""
     import shutil
     return shutil.which("gdb-multiarch") or shutil.which("gdb")
+
+
+@main.group(cls=ColoredGroup)
+def audit():
+    """Compliance / audit reporting from history.db."""
+
+
+@audit.command("export")
+@click.option(
+    "--since",
+    "since_str",
+    default=None,
+    metavar="YYYY-MM-DD",
+    help="Only include deployments on or after this date.",
+)
+@click.option(
+    "--app",
+    "app_filter",
+    default=None,
+    help="Only include this app.",
+)
+@click.option(
+    "--target",
+    "target_filter",
+    default=None,
+    help="Only include this target/module.",
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    metavar="PATH",
+    help="Write to this file instead of stdout.",
+)
+@config_option
+def audit_export(
+    since_str: str | None,
+    app_filter: str | None,
+    target_filter: str | None,
+    out_path: Path | None,
+    config_path: Path | None,
+):
+    """Write a markdown deployment audit from history.db."""
+    cfg = load_config(config_path)
+    db_path = cfg.history_path
+    if not db_path.exists():
+        raise SatDeployError(
+            f"History database not found at {db_path}. "
+            "Deploy something first with `satdeploy push`."
+        )
+
+    since = None
+    if since_str:
+        try:
+            since = audit_module._parse_since(since_str)
+        except ValueError as exc:
+            raise SatDeployError(str(exc)) from exc
+
+    report = audit_module.export_markdown(
+        db_path,
+        since=since,
+        app_filter=app_filter,
+        target_filter=target_filter,
+    )
+
+    if out_path:
+        out_path.write_text(report, encoding="utf-8")
+        click.echo(success(f"Wrote audit to {out_path}"))
+    else:
+        click.echo(report, nl=False)
 
 
