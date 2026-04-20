@@ -41,6 +41,7 @@ from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 from satdeploy.templates import render_service_template, compute_service_hash
 from satdeploy.transport import Transport, SSHTransport, LocalTransport, TransportError
+from satdeploy import debuginfod as debuginfod_module
 from satdeploy import demo as demo_module
 
 
@@ -1598,5 +1599,117 @@ def stop(clean: bool):
 def demo_status_cmd():
     """Show demo environment status."""
     demo_module.demo_status()
+
+
+@main.group(cls=ColoredGroup)
+def debuginfod():
+    """Local debuginfod server for cross-arch debugging."""
+
+
+@debuginfod.command("serve")
+@click.option(
+    "--sysroots",
+    "sysroots_dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=f"Sysroots directory (default: {debuginfod_module.DEFAULT_SYSROOTS_DIR})",
+)
+@click.option(
+    "--port",
+    type=int,
+    default=debuginfod_module.DEBUGINFOD_PORT,
+    help=f"Port to listen on (default: {debuginfod_module.DEBUGINFOD_PORT})",
+)
+def debuginfod_serve(sysroots_dir: Path | None, port: int):
+    """Start a local debuginfod indexing sysroot debug files."""
+    target = sysroots_dir or debuginfod_module.DEFAULT_SYSROOTS_DIR
+    try:
+        pid = debuginfod_module.serve(sysroots_dir=target, port=port)
+    except debuginfod_module.DebuginfodError as exc:
+        raise SatDeployError(str(exc)) from exc
+    click.echo(success(f"debuginfod running (pid {pid}) at http://localhost:{port}"))
+    click.echo(f"  indexing: {target}")
+    click.echo(f"  export DEBUGINFOD_URLS=http://localhost:{port}")
+
+
+@debuginfod.command("stop")
+def debuginfod_stop():
+    """Stop the running debuginfod."""
+    if debuginfod_module.stop():
+        click.echo(success("debuginfod stopped"))
+    else:
+        click.echo(dim("debuginfod not running"))
+
+
+@debuginfod.command("status")
+def debuginfod_status():
+    """Show debuginfod status."""
+    pid = debuginfod_module.status()
+    if pid is None:
+        click.echo(dim("debuginfod not running"))
+    else:
+        click.echo(success(f"debuginfod running (pid {pid}) at {debuginfod_module.DEBUGINFOD_URL}"))
+
+
+@main.command()
+@click.argument("app", type=APP_NAME)
+@click.option(
+    "--remote",
+    "remote_target",
+    default=None,
+    metavar="HOST:PORT",
+    help="Connect gdb to an already-running gdbserver",
+)
+@click.option(
+    "--gdb",
+    "gdb_binary",
+    default=None,
+    help="Override the gdb binary (default: gdb-multiarch, falling back to gdb)",
+)
+@config_option
+def gdb(app: str, remote_target: str | None, gdb_binary: str | None, config_path: Path | None):
+    """Launch gdb against APP's local binary with debuginfod symbols.
+
+    Sets DEBUGINFOD_URLS to the local debuginfod (auto-starts it if missing) so
+    gdb pulls .debug files for any ARM binary running on the target. If
+    --remote HOST:PORT is given, also connects to a gdbserver on the target.
+    """
+    cfg = load_config(config_path)
+    app_config = get_app_config_or_error(cfg, app)
+
+    local_path = Path(app_config.local)
+    if not local_path.exists():
+        raise SatDeployError(
+            f"Local binary for '{app}' not found at {local_path}. "
+            "Build it first (e.g. `ninja -C build`)."
+        )
+
+    chosen_gdb = gdb_binary or shutil_which_gdb()
+    if chosen_gdb is None:
+        raise SatDeployError(
+            "No gdb found on PATH. Install gdb-multiarch:\n"
+            "  apt install gdb-multiarch"
+        )
+
+    if debuginfod_module.status() is None:
+        try:
+            pid = debuginfod_module.serve()
+        except debuginfod_module.DebuginfodError as exc:
+            raise SatDeployError(str(exc)) from exc
+        click.echo(dim(f"started debuginfod (pid {pid})"))
+
+    env = {**os.environ, "DEBUGINFOD_URLS": debuginfod_module.DEBUGINFOD_URL}
+
+    cmd: list[str] = [chosen_gdb, str(local_path)]
+    if remote_target:
+        cmd.extend(["-ex", f"target remote {remote_target}"])
+
+    os.execvpe(chosen_gdb, cmd, env)
+
+
+def shutil_which_gdb() -> str | None:
+    """Prefer gdb-multiarch over native gdb for ARM targets."""
+    import shutil
+    return shutil.which("gdb-multiarch") or shutil.which("gdb")
 
 
