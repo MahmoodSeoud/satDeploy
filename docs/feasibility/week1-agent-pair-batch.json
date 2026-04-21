@@ -1,0 +1,56 @@
+{
+  "mode": "pair-batch",
+  "dir": "/tmp/agent-binaries",
+  "pairs": 3,
+  "skipped": [],
+  "patch_size_bytes": {
+    "min": 6600,
+    "max": 11582,
+    "mean": 8716,
+    "p50": 7966,
+    "p95": 11582,
+    "p99": 11582
+  },
+  "patch_ratio": {
+    "min": 0.013400906388577554,
+    "max": 0.023523438134698187,
+    "mean": 0.017707328613628177,
+    "p50": 0.016197641317608785,
+    "p95": 0.023523438134698187,
+    "p99": 0.023523438134698187
+  },
+  "compute_ms": {
+    "min": 79.16589174419641,
+    "max": 84.17375991120934,
+    "mean": 81.15662944813569,
+    "p50": 80.13023668900132,
+    "p95": 84.17375991120934,
+    "p99": 84.17375991120934
+  },
+  "per_pair": [
+    {
+      "old": "/tmp/agent-binaries/01-268b5e4.bin",
+      "new": "/tmp/agent-binaries/03-a761361.bin",
+      "old_size": 491704,
+      "new_size": 491800,
+      "patch_size": 7966,
+      "compute_ms": 79.16589174419641
+    },
+    {
+      "old": "/tmp/agent-binaries/03-a761361.bin",
+      "new": "/tmp/agent-binaries/04-b342369.bin",
+      "old_size": 491800,
+      "new_size": 492360,
+      "patch_size": 11582,
+      "compute_ms": 84.17375991120934
+    },
+    {
+      "old": "/tmp/agent-binaries/04-b342369.bin",
+      "new": "/tmp/agent-binaries/05-4999cbe.bin",
+      "old_size": 492360,
+      "new_size": 492504,
+      "patch_size": 6600,
+      "compute_ms": 80.13023668900132
+    }
+  ]
+}
