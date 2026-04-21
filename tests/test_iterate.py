@@ -46,11 +46,18 @@ def sysroot_complete(tmp_path):
 @pytest.fixture
 def fake_config(tmp_path, tmp_binary, monkeypatch):
     """A Config stub whose history_path lives under tmp_path (no shared
-    state between tests) and exposes one app called 'controller'."""
+    state between tests) and exposes one app called 'controller'.
+
+    Matches the real Config's public surface — see satdeploy/config.py:139
+    for `config_path` (property). Using ``spec=Config`` ensures tests
+    fail at setup if we reference an attribute the real class doesn't
+    have, rather than at a non-deterministic call site.
+    """
     cfg = MagicMock(spec=Config)
-    cfg.path = tmp_path / "config.yaml"
+    cfg.config_path = tmp_path / "config.yaml"
     cfg.history_path = tmp_path / "history.db"
     cfg.get_backup_dir = lambda name: str(tmp_path / "backups" / name)
+    cfg.get_all_app_names = lambda: ["controller"]
     cfg.get_app = lambda name: (
         AppConfig(
             name="controller",
@@ -405,10 +412,17 @@ def test_debug_path_raises_debug_error_when_transport_has_no_exec(
 def test_missing_app_raises_unknown_error(
     fake_config, fake_module, mocked_transport
 ):
+    """Regression: iterate previously referenced `config.path` which does
+    not exist on the real Config class (it's `config_path`). With MagicMock
+    not speccing the attribute the unit tests passed while the live CLI
+    crashed with AttributeError. Spec-locked fixture + listing known apps
+    in the message catches both problems."""
     with patch("satdeploy.cli.get_transport", return_value=mocked_transport):
         with pytest.raises(errors.UnknownError) as excinfo:
             iterate.run_iterate(fake_config, fake_module, "nonexistent-app")
     assert "nonexistent-app" in excinfo.value.message
+    # Error message must list known apps so the user isn't left guessing.
+    assert "controller" in excinfo.value.message
     mocked_transport.connect.assert_not_called()
 
 

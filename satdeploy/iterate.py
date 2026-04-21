@@ -215,8 +215,10 @@ def run_iterate(
     # Resolve app config + local path — fail fast with a typed-ish message.
     app_config = config.get_app(app)
     if app_config is None:
+        known = ", ".join(sorted(config.get_all_app_names())) or "(none configured)"
         raise errors.UnknownError(
-            f"No app named {app!r} in config {config.path}."
+            f"No app named {app!r} in config {config.config_path}. "
+            f"Known apps: {known}."
         )
 
     local_path = Path(os.path.expanduser(local_override or app_config.local))
