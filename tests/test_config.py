@@ -485,8 +485,8 @@ class TestGetModules:
         assert "som1" in modules
         assert isinstance(modules["som1"], ModuleConfig)
 
-    def test_get_module_returns_target(self, tmp_path):
-        """get_module() should return target (ignoring name arg)."""
+    def test_get_module_returns_target_by_name(self, tmp_path):
+        """get_module(name) should return the named target (deprecated alias for get_target)."""
         config_file = tmp_path / "config.yaml"
         config_data = {
             "name": "som1",
@@ -499,10 +499,27 @@ class TestGetModules:
 
         config = Config(config_path=tmp_path / "config.yaml")
         config.load()
-        module = config.get_module("anything")
+        module = config.get_module("som1")
 
         assert module.name == "som1"
         assert module.host == "192.168.1.10"
+
+    def test_get_module_unknown_name_raises(self, tmp_path):
+        """get_module() should raise KeyError for an unknown target name."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_path=tmp_path / "config.yaml")
+        config.load()
+        with pytest.raises(KeyError):
+            config.get_module("anything")
 
 
 class TestGetAppConfig:
@@ -705,3 +722,151 @@ class TestGetAppsys:
         appsys = config.get_appsys()
 
         assert appsys == {}
+
+
+class TestMultiTargetConfig:
+    """R1: fleet preview — YAML `targets:` block with N targets."""
+
+    def _write_fleet(self, tmp_path, extra_top_level: dict | None = None) -> Config:
+        config_data = {
+            "default_target": "som1",
+            "targets": {
+                "som1": {
+                    "transport": "local",
+                    "target_dir": str(tmp_path / "som1"),
+                },
+                "som2": {
+                    "transport": "local",
+                    "target_dir": str(tmp_path / "som2"),
+                },
+            },
+            "apps": {
+                "test_app": {
+                    "local": str(tmp_path / "bin" / "test_app"),
+                    "remote": "/bin/test_app",
+                },
+            },
+        }
+        if extra_top_level:
+            config_data.update(extra_top_level)
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_path=config_file)
+        config.load()
+        return config
+
+    def test_load_multi_target_populates_targets(self, tmp_path):
+        """Multi-target YAML should expose both targets via target_names."""
+        config = self._write_fleet(tmp_path)
+        assert sorted(config.target_names) == ["som1", "som2"]
+
+    def test_default_target_returned_when_name_omitted(self, tmp_path):
+        """get_target() with no name returns default_target."""
+        config = self._write_fleet(tmp_path)
+        target = config.get_target()
+        assert target.name == "som1"
+        assert target.target_dir == str(tmp_path / "som1")
+
+    def test_get_target_by_name(self, tmp_path):
+        """get_target('som2') should return the named target."""
+        config = self._write_fleet(tmp_path)
+        target = config.get_target("som2")
+        assert target.name == "som2"
+        assert target.target_dir == str(tmp_path / "som2")
+
+    def test_get_target_unknown_raises(self, tmp_path):
+        """get_target('bogus') raises KeyError listing available targets."""
+        config = self._write_fleet(tmp_path)
+        with pytest.raises(KeyError) as excinfo:
+            config.get_target("bogus")
+        assert "som1" in str(excinfo.value)
+        assert "som2" in str(excinfo.value)
+
+    def test_get_modules_returns_all_targets(self, tmp_path):
+        """get_modules() should return ModuleConfigs for every target."""
+        config = self._write_fleet(tmp_path)
+        modules = config.get_modules()
+        assert set(modules.keys()) == {"som1", "som2"}
+        assert modules["som1"].target_dir == str(tmp_path / "som1")
+        assert modules["som2"].target_dir == str(tmp_path / "som2")
+
+    def test_module_name_returns_default_target(self, tmp_path):
+        """module_name should return default_target for multi-target configs."""
+        config = self._write_fleet(tmp_path)
+        assert config.module_name == "som1"
+
+    def test_default_target_falls_back_to_first_when_omitted(self, tmp_path):
+        """Omitting default_target picks the first target by YAML insertion order."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({
+            "targets": {
+                "alpha": {"transport": "local", "target_dir": str(tmp_path / "a")},
+                "beta":  {"transport": "local", "target_dir": str(tmp_path / "b")},
+            },
+            "apps": {},
+        }))
+        config = Config(config_path=config_file)
+        config.load()
+        assert config.module_name == "alpha"
+
+    def test_per_target_backup_dir_wins(self, tmp_path):
+        """Per-target backup_dir overrides top-level backup_dir."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({
+            "backup_dir": "/global/backups",
+            "targets": {
+                "som1": {
+                    "transport": "local",
+                    "target_dir": str(tmp_path / "som1"),
+                    "backup_dir": "/som1/backups",
+                },
+                "som2": {
+                    "transport": "local",
+                    "target_dir": str(tmp_path / "som2"),
+                },
+            },
+            "apps": {},
+        }))
+        config = Config(config_path=config_file)
+        config.load()
+
+        assert config.get_backup_dir("som1") == "/som1/backups"
+        assert config.get_backup_dir("som2") == "/global/backups"
+
+    def test_local_backup_dir_derives_from_target_dir(self, tmp_path):
+        """Local transport without explicit backup_dir → `{target_dir}/.satdeploy-backups`."""
+        config = self._write_fleet(tmp_path)
+        derived = config.get_backup_dir("som2")
+        assert derived == str(tmp_path / "som2" / ".satdeploy-backups")
+
+    def test_multi_target_validate_prefixes_errors(self, tmp_path):
+        """validate() should prefix errors with `targets.<name>.` for multi-target configs."""
+        config = Config(config_path=tmp_path / "config.yaml")
+        errors = config.validate({
+            "targets": {
+                "som1": {"transport": "ssh"},  # missing host and user
+                "som2": {"transport": "local", "target_dir": "/x"},
+            },
+            "apps": {},
+        })
+        assert "targets.som1.host" in errors
+        assert "targets.som1.user" in errors
+
+    def test_flat_config_normalizes_to_single_target(self, tmp_path):
+        """Legacy flat format should produce a single-entry targets dict."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({
+            "name": "legacy",
+            "transport": "ssh",
+            "host": "1.2.3.4",
+            "user": "root",
+            "apps": {},
+        }))
+        config = Config(config_path=config_file)
+        config.load()
+
+        assert config.target_names == ["legacy"]
+        assert config.get_target().name == "legacy"
+        assert config.get_target("legacy").host == "1.2.3.4"
+        assert config.module_name == "legacy"

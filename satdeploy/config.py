@@ -75,24 +75,65 @@ class AppConfig:
 DEFAULT_CONFIG_DIR = Path.home() / ".satdeploy"
 DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.yaml"
 
+# Top-level keys that describe transport for a single target. When found at
+# the top level of a flat-format config, they are lifted into the synthesized
+# targets dict on load().
+_TARGET_FIELDS = (
+    "transport",
+    "host",
+    "user",
+    "target_dir",
+    "zmq_endpoint",
+    "agent_node",
+    "appsys_node",
+    "ground_node",
+    "zmq_pub_port",
+    "zmq_sub_port",
+    "csp_addr",
+    "appsys",
+    "app_nodes",
+    "backup_dir",
+)
+
 
 class Config:
     """Handles loading, saving, and validating satdeploy configuration.
 
-    Expects a flat config format with target settings at the top level:
+    Supports two YAML shapes, normalized to the same internal form on load():
+
+    Flat (legacy, single-target) — top-level `name` is the target name and
+    transport fields sit at the top level:
 
         name: som1
         transport: csp
         zmq_endpoint: tcp://localhost:9600
         agent_node: 5425
-        ...
         apps:
           dipp: ...
+
+    Multi-target — transport config lives under `targets:` keyed by name,
+    with `default_target:` selecting which target `--target`-less commands use:
+
+        default_target: som1
+        targets:
+          som1:
+            transport: local
+            target_dir: /tmp/som1
+          som2:
+            transport: local
+            target_dir: /tmp/som2
+        apps:
+          dipp: ...
+
+    After load(), `self._targets` always holds {name -> target_dict} and
+    `self._default_target` names the one returned by `get_target()` (no name).
     """
 
     def __init__(self, config_path: Optional[Path] = None):
         self._config_path = Path(config_path) if config_path else DEFAULT_CONFIG_FILE
         self._data: Optional[dict] = None
+        self._targets: dict[str, dict] = {}
+        self._default_target: Optional[str] = None
 
     @property
     def config_path(self) -> Path:
@@ -114,10 +155,10 @@ class Config:
         return self._config_path.parent / db_name
 
     def load(self) -> Optional[dict]:
-        """Load configuration from disk.
+        """Load configuration from disk and normalize target layout.
 
         Returns:
-            The configuration dictionary, or None if file doesn't exist.
+            The raw configuration dictionary, or None if file doesn't exist.
 
         Raises:
             yaml.YAMLError: If the config file contains invalid YAML.
@@ -137,7 +178,34 @@ class Config:
                     if key not in self._data:
                         self._data[key] = value
 
+        self._normalize_targets()
         return self._data
+
+    def _normalize_targets(self) -> None:
+        """Populate self._targets and self._default_target from self._data.
+
+        Flat format → single-entry targets dict keyed by `name` (or "default").
+        Multi-target format → uses the `targets:` block directly.
+        """
+        self._targets = {}
+        self._default_target = None
+        if self._data is None:
+            return
+
+        data = self._data
+        if "targets" in data and isinstance(data["targets"], dict):
+            self._targets = {
+                name: dict(td or {})
+                for name, td in data["targets"].items()
+            }
+            self._default_target = data.get("default_target")
+            if self._default_target is None and self._targets:
+                self._default_target = next(iter(self._targets))
+        else:
+            name = data.get("name", "default")
+            target_fields = {key: data[key] for key in _TARGET_FIELDS if key in data}
+            self._targets = {name: target_fields}
+            self._default_target = name
 
     def save(self, data: dict) -> None:
         """Save configuration to disk.
@@ -151,6 +219,7 @@ class Config:
         with open(self.config_path, "w") as f:
             yaml.dump(data, f, default_flow_style=False)
         self._data = data
+        self._normalize_targets()
 
     def validate(self, data: dict) -> list[str]:
         """Validate flat configuration data.
@@ -163,8 +232,28 @@ class Config:
         """
         errors = []
 
-        transport = data.get("transport", "ssh")
+        if "targets" in data and isinstance(data["targets"], dict):
+            for tname, tdata in data["targets"].items():
+                tdata = tdata or {}
+                errors.extend(
+                    f"targets.{tname}.{e}" for e in self._validate_transport(tdata)
+                )
+        else:
+            errors.extend(self._validate_transport(data))
 
+        apps = data.get("apps", {})
+        for app_name, app_config in apps.items():
+            if "local" not in app_config:
+                errors.append(f"apps.{app_name}.local")
+            if "remote" not in app_config:
+                errors.append(f"apps.{app_name}.remote")
+
+        return errors
+
+    def _validate_transport(self, data: dict) -> list[str]:
+        """Validate transport-specific required fields for a single target."""
+        errors: list[str] = []
+        transport = data.get("transport", "ssh")
         if transport == "ssh":
             if "host" not in data:
                 errors.append("host")
@@ -180,83 +269,84 @@ class Config:
                 errors.append("target_dir")
         else:
             errors.append(f"unknown transport: {transport}")
-
-        apps = data.get("apps", {})
-        for app_name, app_config in apps.items():
-            if "local" not in app_config:
-                errors.append(f"apps.{app_name}.local")
-            if "remote" not in app_config:
-                errors.append(f"apps.{app_name}.remote")
-
         return errors
 
     @property
     def module_name(self) -> str:
-        """Get the target name from config (defaults to 'default')."""
-        if self._data is None:
-            return "default"
-        return self._data.get("name", "default")
+        """Get the default target name (defaults to 'default')."""
+        return self._default_target or "default"
 
-    def get_target(self) -> ModuleConfig:
-        """Build a ModuleConfig from top-level flat config fields.
+    @property
+    def target_names(self) -> list[str]:
+        """Names of all configured targets, preserving insertion order."""
+        return list(self._targets.keys())
+
+    def get_target(self, name: Optional[str] = None) -> ModuleConfig:
+        """Build a ModuleConfig for a named target (or the default).
+
+        Args:
+            name: Target name. If None, returns the default target (first
+                target in multi-target config, or `name:` in flat config).
 
         Returns:
-            ModuleConfig with settings from the flat config.
+            ModuleConfig for the resolved target.
+
+        Raises:
+            RuntimeError: If config not loaded.
+            KeyError: If `name` is not in the configured targets.
         """
         if self._data is None:
             raise RuntimeError("Config not loaded")
 
-        name = self._data.get("name", "default")
-        transport = self._data.get("transport", "ssh")
-        appsys = self._data.get("appsys", {})
+        resolved = name if name is not None else self._default_target
+        if resolved is None or resolved not in self._targets:
+            raise KeyError(
+                f"Target '{resolved}' not in config "
+                f"(available: {list(self._targets)})"
+            )
+
+        td = self._targets[resolved]
+        appsys = td.get("appsys", {}) or {}
 
         return ModuleConfig(
-            name=name,
-            transport=transport,
+            name=resolved,
+            transport=td.get("transport", "ssh"),
             # SSH fields
-            host=self._data.get("host"),
-            user=self._data.get("user"),
+            host=td.get("host"),
+            user=td.get("user"),
             # Local transport fields
-            target_dir=self._data.get("target_dir"),
+            target_dir=td.get("target_dir"),
             # CSP fields
-            zmq_endpoint=self._data.get("zmq_endpoint"),
-            agent_node=self._data.get("agent_node"),
-            appsys_node=self._data.get("appsys_node"),
-            ground_node=self._data.get("ground_node", 40),
-            zmq_pub_port=self._data.get("zmq_pub_port", 9600),
-            zmq_sub_port=self._data.get("zmq_sub_port", 9601),
+            zmq_endpoint=td.get("zmq_endpoint"),
+            agent_node=td.get("agent_node"),
+            appsys_node=td.get("appsys_node"),
+            ground_node=td.get("ground_node", 40),
+            zmq_pub_port=td.get("zmq_pub_port", 9600),
+            zmq_sub_port=td.get("zmq_sub_port", 9601),
             # Common fields
-            csp_addr=self._data.get("csp_addr", 0),
+            csp_addr=td.get("csp_addr", 0),
             netmask=appsys.get("netmask", 0),
             interface=appsys.get("interface", 0),
             baudrate=appsys.get("baudrate", 0),
             vmem_path=appsys.get("vmem_path", ""),
             # Per-app node addresses
-            app_nodes=self._data.get("app_nodes"),
+            app_nodes=td.get("app_nodes"),
         )
 
     def get_modules(self) -> dict[str, ModuleConfig]:
-        """Get all configured modules.
-
-        For flat config, returns a single-entry dict keyed by module_name.
+        """Get all configured targets as ModuleConfigs.
 
         Returns:
-            Dictionary mapping module name to ModuleConfig.
+            Dictionary mapping target name to ModuleConfig.
         """
-        if self._data is None:
-            return {}
-
-        return {self.module_name: self.get_target()}
+        return {name: self.get_target(name) for name in self._targets}
 
     def get_module(self, name: str) -> ModuleConfig:
-        """Get target module configuration.
+        """Deprecated alias for `get_target(name)`.
 
-        Transitional: ignores name parameter, returns the single target.
-
-        Returns:
-            ModuleConfig with target settings.
+        Kept for callers still using the pre-R1 name. Prefer `get_target()`.
         """
-        return self.get_target()
+        return self.get_target(name)
 
     def get_app(self, name: str) -> Optional[AppConfig]:
         """Get configuration for a specific app.
@@ -292,28 +382,34 @@ class Config:
             return {}
         return self._data.get("apps", {})
 
-    @property
-    def backup_dir(self) -> str:
-        """Get backup directory path.
+    def get_backup_dir(self, target_name: Optional[str] = None) -> str:
+        """Get backup directory for a specific target.
 
-        For SSH/CSP, this is a path on the remote target so the default
-        `/opt/satdeploy/backups` is a reasonable Linux filesystem choice.
-        For the `local` transport the backup dir lives on the user's own
-        machine, and defaulting to `/opt/...` requires root to create —
-        so we default to `{target_dir}/.satdeploy-backups` instead, which
-        is guaranteed to be co-located with the target and therefore
-        writable by whoever can write to the target in the first place.
+        Per-target `backup_dir` wins over top-level `backup_dir`. For local
+        transport without explicit setting, derives `{target_dir}/.satdeploy-backups`
+        so the default lives next to the target (writable without root).
         """
         if self._data is None:
             return "/opt/satdeploy/backups"
-        explicit = self._data.get("backup_dir")
+
+        resolved = target_name if target_name is not None else self._default_target
+        td = self._targets.get(resolved, {}) if resolved else {}
+
+        explicit = td.get("backup_dir") or self._data.get("backup_dir")
         if explicit:
             return explicit
-        if self._data.get("transport") == "local":
-            target_dir = self._data.get("target_dir", "")
+
+        if td.get("transport") == "local":
+            target_dir = td.get("target_dir", "")
             if target_dir:
                 return str(Path(target_dir).expanduser() / ".satdeploy-backups")
+
         return "/opt/satdeploy/backups"
+
+    @property
+    def backup_dir(self) -> str:
+        """Backup directory for the default target (see `get_backup_dir`)."""
+        return self.get_backup_dir()
 
     @property
     def max_backups(self) -> int:
@@ -332,12 +428,14 @@ class Config:
             return []
         return list(self._data.get("apps", {}).keys())
 
-    def get_appsys(self) -> dict:
-        """Get appsys network settings.
+    def get_appsys(self, target_name: Optional[str] = None) -> dict:
+        """Get appsys network settings for a target.
 
         Returns:
             Dictionary with appsys settings (netmask, interface, etc.).
         """
         if self._data is None:
             return {}
-        return self._data.get("appsys", {})
+        resolved = target_name if target_name is not None else self._default_target
+        td = self._targets.get(resolved, {}) if resolved else {}
+        return td.get("appsys", {}) or self._data.get("appsys", {}) or {}
