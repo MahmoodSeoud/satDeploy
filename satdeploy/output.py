@@ -413,14 +413,14 @@ def render_config_block(*, cfg, module) -> str:
     lines = []
     lines.append(
         render_target_header(
-            name=cfg.module_name,
+            name=module.name,
             transport=module.transport,
             endpoint=target_endpoint(module),
         )
     )
     lines.append("")
     lines.append("  " + dim("config file: ") + str(cfg.config_path))
-    lines.append("  " + dim("backup dir:  ") + str(cfg.backup_dir))
+    lines.append("  " + dim("backup dir:  ") + str(cfg.get_backup_dir(module.name)))
     if getattr(module, "appsys_node", None):
         lines.append("  " + dim("appsys node: ") + str(module.appsys_node))
     else:

@@ -342,6 +342,54 @@ def node_option(f):
     )(f)
 
 
+class TargetNameType(click.ParamType):
+    """Click parameter type with shell completion for configured target names."""
+
+    name = "target"
+
+    def shell_complete(self, ctx, param, incomplete):
+        config_path = ctx.params.get("config_path")
+        config = Config(config_path=config_path)
+        if config.load() is None:
+            return []
+        return [
+            CompletionItem(name)
+            for name in config.target_names
+            if name.startswith(incomplete)
+        ]
+
+
+TARGET_NAME = TargetNameType()
+
+
+def target_option(f):
+    """Shared --target option for picking a configured target (fleet preview R1)."""
+    return click.option(
+        "-t", "--target",
+        "target_name",
+        type=TARGET_NAME,
+        default=None,
+        envvar="SATDEPLOY_TARGET",
+        help="Target name from config (default: the first/default target)",
+    )(f)
+
+
+def resolve_target(config: Config, target_name: str | None) -> ModuleConfig:
+    """Resolve --target value to a ModuleConfig, turning KeyError into SatDeployError.
+
+    `target_name` of None means the default target (first entry or `default_target`
+    from config). An unknown name produces a typed error that lists the available
+    targets so the user can fix it without reading source.
+    """
+    try:
+        return config.get_target(target_name)
+    except KeyError:
+        available = ", ".join(config.target_names) or "<none>"
+        raise SatDeployError(
+            f"Target '{target_name}' not in config. Available: {available}"
+        )
+
+
 class AppNameType(click.ParamType):
     """Click parameter type with shell completion for app names from config."""
 
@@ -598,6 +646,7 @@ def completion(install: bool, uninstall: bool):
     help="Refuse to deploy from a dirty git working tree",
 )
 @config_option
+@target_option
 @node_option
 def push(
     apps: tuple[str, ...],
@@ -607,6 +656,7 @@ def push(
     force: bool,
     require_clean: bool,
     config_path: Path | None,
+    target_name: str | None,
     node_override: int | None,
 ):
     """Deploy one or more apps to a target.
@@ -671,9 +721,10 @@ def push(
             if not apps:
                 raise SatDeployError("No apps configured")
 
-    module_config = config.get_target()
+    module_config = resolve_target(config, target_name)
     if node_override:
         module_config.agent_node = node_override
+    backup_dir = config.get_backup_dir(module_config.name)
 
     # Only allow single app when using --local override
     if local and len(apps) > 1 and not adhoc_mode:
@@ -720,7 +771,7 @@ def push(
             for name, cfg in config.apps.items()
         } if module_config.transport == "local" and config.apps else None
         transport = get_transport(
-            module_config, config.backup_dir, apps=apps_dict_for_transport,
+            module_config, backup_dir, apps=apps_dict_for_transport,
         )
         if module_config.transport == "csp":
             click.echo(dim(f"  Connecting to {module_config.zmq_endpoint}..."))
@@ -783,7 +834,7 @@ def push(
                     click.echo("")
                     click.echo(render_push_header(
                         app=app,
-                        target_name=config.module_name,
+                        target_name=module_config.name,
                         old_hash=old_hash,
                         new_hash=local_hash,
                         old_git=old_git,
@@ -854,7 +905,7 @@ def push(
                     click.echo("")
 
                     history.record(DeploymentRecord(
-                        module=config.module_name,
+                        module=module_config.name,
                         app=app,
                         file_hash=local_hash,
                         remote_path=remote_path,
@@ -866,7 +917,7 @@ def push(
                     ))
                 else:
                     history.record(DeploymentRecord(
-                        module=config.module_name,
+                        module=module_config.name,
                         app=app,
                         file_hash="",
                         remote_path=remote_path,
@@ -880,7 +931,7 @@ def push(
             # Record failure against the app that was being deployed
             failed_app = app if 'app' in dir() else (apps[0] if apps else "")
             history.record(DeploymentRecord(
-                module=config.module_name,
+                module=module_config.name,
                 app=failed_app,
                 file_hash="",
                 remote_path="",
@@ -902,7 +953,7 @@ def push(
     # Include ad-hoc apps in transport config
     for name, acfg in adhoc_app_configs.items():
         apps_dict[name] = {"remote": acfg.remote, "service": None}
-    transport = get_transport(module_config, config.backup_dir, apps=apps_dict)
+    transport = get_transport(module_config, backup_dir, apps=apps_dict)
     click.echo(f"Connecting to {module_config.host}...")
 
     try:
@@ -940,7 +991,7 @@ def push(
                 prov_tuple = provenance_map.get(app, (None, "local"))
                 provenance, prov_source = prov_tuple
                 history.record(DeploymentRecord(
-                    module=config.module_name,
+                    module=module_config.name,
                     app=app,
                     file_hash=local_hash,
                     remote_path=remote_path,
@@ -971,7 +1022,7 @@ def push(
                         click.echo(warning(f"Health check: {app} is not running"))
             else:
                 history.record(DeploymentRecord(
-                    module=config.module_name,
+                    module=module_config.name,
                     app=app,
                     file_hash="",
                     remote_path=remote_path,
@@ -984,7 +1035,7 @@ def push(
     except TransportError as e:
         failed_app = app if 'app' in dir() else (apps[0] if apps else "")
         history.record(DeploymentRecord(
-            module=config.module_name,
+            module=module_config.name,
             app=failed_app,
             file_hash="",
             remote_path="",
@@ -1001,14 +1052,16 @@ def push(
 
 @main.command()
 @config_option
+@target_option
 @node_option
-def status(config_path: Path | None, node_override: int | None):
+def status(config_path: Path | None, target_name: str | None, node_override: int | None):
     """Show status of deployed apps and services."""
     config = load_config(config_path)
 
-    module_config = config.get_target()
+    module_config = resolve_target(config, target_name)
     if node_override:
         module_config.agent_node = node_override
+    backup_dir = config.get_backup_dir(module_config.name)
     apps = config.apps
     history = get_history(config.history_path)
 
@@ -1019,11 +1072,11 @@ def status(config_path: Path | None, node_override: int | None):
             for name, cfg in config.apps.items()
         } if module_config.transport == "local" and config.apps else None
         transport = get_transport(
-            module_config, config.backup_dir, apps=apps_dict_for_transport,
+            module_config, backup_dir, apps=apps_dict_for_transport,
         )
 
         all_app_names = list(apps.keys()) if apps else []
-        module_state = history.get_module_state(config.module_name)
+        module_state = history.get_module_state(module_config.name)
         adhoc_apps = [name for name in module_state
                       if name not in all_app_names and module_state[name].success]
 
@@ -1086,7 +1139,7 @@ def status(config_path: Path | None, node_override: int | None):
     target = {"host": module_config.host, "user": module_config.user}
 
     ssh_all_app_names = list(apps.keys()) if apps else []
-    ssh_module_state = history.get_module_state(config.module_name)
+    ssh_module_state = history.get_module_state(module_config.name)
     ssh_adhoc_apps = [name for name in ssh_module_state
                       if name not in ssh_all_app_names and ssh_module_state[name].success]
 
@@ -1153,8 +1206,14 @@ def status(config_path: Path | None, node_override: int | None):
 @main.command("list")
 @click.argument("app", type=APP_NAME)
 @config_option
+@target_option
 @node_option
-def list_backups(app: str, config_path: Path | None, node_override: int | None):
+def list_backups(
+    app: str,
+    config_path: Path | None,
+    target_name: str | None,
+    node_override: int | None,
+):
     """List all versions of an app (deployed + backups).
 
     APP is the name of the application to list versions for.
@@ -1164,9 +1223,10 @@ def list_backups(app: str, config_path: Path | None, node_override: int | None):
     """
     config = load_config(config_path)
 
-    module_config = config.get_target()
+    module_config = resolve_target(config, target_name)
     if node_override:
         module_config.agent_node = node_override
+    backup_dir = config.get_backup_dir(module_config.name)
     history = get_history(config.history_path)
 
     # Get currently deployed version from history
@@ -1179,7 +1239,7 @@ def list_backups(app: str, config_path: Path | None, node_override: int | None):
             for name, cfg in config.apps.items()
         } if module_config.transport == "local" and config.apps else None
         transport = get_transport(
-            module_config, config.backup_dir, apps=apps_dict_for_transport,
+            module_config, backup_dir, apps=apps_dict_for_transport,
         )
 
         try:
@@ -1243,7 +1303,7 @@ def list_backups(app: str, config_path: Path | None, node_override: int | None):
     with SSHClient(host=target["host"], user=target["user"]) as ssh:
         deployer = Deployer(
             ssh=ssh,
-            backup_dir=config.backup_dir,
+            backup_dir=backup_dir,
             max_backups=config.max_backups,
         )
 
@@ -1302,8 +1362,16 @@ def list_backups(app: str, config_path: Path | None, node_override: int | None):
 @click.option("-H", "--hash", "hash_option", default=None,
               help="Specific backup hash to restore")
 @config_option
+@target_option
 @node_option
-def rollback(app: str, hash: str | None, hash_option: str | None, config_path: Path | None, node_override: int | None):  # noqa: A002
+def rollback(
+    app: str,
+    hash: str | None,
+    hash_option: str | None,
+    config_path: Path | None,
+    target_name: str | None,
+    node_override: int | None,
+):  # noqa: A002
     """Rollback to a previous version.
 
     APP is the name of the application to rollback.
@@ -1312,9 +1380,10 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
     target_hash = hash_option or hash  # -H flag takes precedence over positional
     config = load_config(config_path)
 
-    module_config = config.get_target()
+    module_config = resolve_target(config, target_name)
     if node_override:
         module_config.agent_node = node_override
+    backup_dir = config.get_backup_dir(module_config.name)
     history = get_history(config.history_path)
     backup_path = None
 
@@ -1325,7 +1394,7 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
             for name, cfg in config.apps.items()
         } if module_config.transport == "local" and config.apps else None
         transport = get_transport(
-            module_config, config.backup_dir, apps=apps_dict_for_transport,
+            module_config, backup_dir, apps=apps_dict_for_transport,
         )
         if module_config.transport == "csp":
             click.echo(f"Connecting to {module_config.zmq_endpoint}...")
@@ -1345,7 +1414,7 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
             if result.success:
                 actual_hash = target_hash or (result.backup_path or "").split("-")[-1].replace(".bak", "") or ""
                 history.record(DeploymentRecord(
-                    module=config.module_name,
+                    module=module_config.name,
                     app=app,
                     file_hash=actual_hash,
                     remote_path="",
@@ -1355,7 +1424,7 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
                 click.echo("")
                 click.echo(render_rollback_header(
                     app=app,
-                    target_name=config.module_name,
+                    target_name=module_config.name,
                     from_hash=from_hash,
                     to_hash=actual_hash or None,
                     to_timestamp=None,
@@ -1367,7 +1436,7 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
                 click.echo("")
             else:
                 history.record(DeploymentRecord(
-                    module=config.module_name,
+                    module=module_config.name,
                     app=app,
                     file_hash="",
                     remote_path="",
@@ -1379,7 +1448,7 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
 
         except TransportError as e:
             history.record(DeploymentRecord(
-                module=config.module_name,
+                module=module_config.name,
                 app=app,
                 file_hash="",
                 remote_path="",
@@ -1405,7 +1474,7 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
             service_manager = ServiceManager(ssh)
             deployer = Deployer(
                 ssh=ssh,
-                backup_dir=config.backup_dir,
+                backup_dir=backup_dir,
                 max_backups=config.max_backups,
             )
 
@@ -1490,7 +1559,7 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
 
             # Log successful rollback
             history.record(DeploymentRecord(
-                module=config.module_name,
+                module=module_config.name,
                 app=app,
                 file_hash=backup_hash,
                 remote_path=remote_path,
@@ -1504,7 +1573,7 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
     except SSHError as e:
         # Log failed rollback
         history.record(DeploymentRecord(
-            module=config.module_name,
+            module=module_config.name,
             app=app,
             file_hash="",
             remote_path=remote_path,
@@ -1518,10 +1587,11 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
 
 @main.command()
 @config_option
-def config(config_path: Path | None):
+@target_option
+def config(config_path: Path | None, target_name: str | None):
     """Show current configuration."""
     cfg = load_config(config_path)
-    module = cfg.get_target()
+    module = resolve_target(cfg, target_name)
     click.echo(render_config_block(cfg=cfg, module=module))
 
 
@@ -1534,15 +1604,22 @@ def config(config_path: Path | None):
     help="Number of lines to show (default: 100)",
 )
 @config_option
+@target_option
 @node_option
-def logs(app: str, lines: int, config_path: Path | None, node_override: int | None):
+def logs(
+    app: str,
+    lines: int,
+    config_path: Path | None,
+    target_name: str | None,
+    node_override: int | None,
+):
     """Show logs for an app's service.
 
     APP is the name of the application to show logs for.
     """
     config = load_config(config_path)
 
-    module_config = config.get_target()
+    module_config = resolve_target(config, target_name)
     if node_override:
         module_config.agent_node = node_override
 
@@ -1556,9 +1633,7 @@ def logs(app: str, lines: int, config_path: Path | None, node_override: int | No
             f"`service:` field to its config entry."
         )
 
-    module_config = config.get_target()
-
-    transport = get_transport(module_config, config.backup_dir)
+    transport = get_transport(module_config, config.get_backup_dir(module_config.name))
     try:
         transport.connect()
         click.echo(click.style(f"Logs for {app} ({service}):", bold=True))
