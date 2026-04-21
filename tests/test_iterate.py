@@ -409,6 +409,37 @@ def test_debug_path_raises_debug_error_when_transport_has_no_exec(
 # Missing app / missing local file
 # ---------------------------------------------------------------------------
 
+def test_iterate_passes_dependency_ordered_services_to_transport(
+    fake_config, fake_module, mocked_transport
+):
+    """The whole point of satdeploy over rsync-and-restart is that it
+    stops services in dependents-first order and starts them in
+    dependencies-first order, driven by config. Regression guard: if
+    iterate ever stops passing `services=` into transport.deploy, the
+    ordering contract silently reverts to "just the app's own service"
+    and a deploy of `libparam` stops restarting the downstream services
+    that depend on it.
+
+    See design doc: stop order = dependents first, start order = deps first.
+    """
+    from satdeploy import cli as cli_module
+
+    fake_services = [
+        ("controller", "controller.service"),
+        ("csp_server", "csp_server.service"),
+    ]
+    with patch("satdeploy.cli.get_transport", return_value=mocked_transport), \
+         patch("satdeploy.iterate.resolve_provenance", return_value=("x", "local")), \
+         patch.object(cli_module, "get_services_to_manage", return_value=fake_services) as gsm:
+        iterate.run_iterate(fake_config, fake_module, "controller")
+
+    gsm.assert_called_once()
+    # Confirm the same list reached transport.deploy without reordering or
+    # dropping entries — the SSH transport is what actually uses this.
+    call_kwargs = mocked_transport.deploy.call_args.kwargs
+    assert call_kwargs.get("services") == fake_services
+
+
 def test_missing_app_raises_unknown_error(
     fake_config, fake_module, mocked_transport
 ):

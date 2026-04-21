@@ -246,6 +246,19 @@ def run_iterate(
         file_hash = compute_file_hash(str(local_path))
         step(f"upload: {local_path.stat().st_size:,} B, hash {file_hash}")
 
+        # Resolve the dependency-aware service list (see
+        # satdeploy/dependencies.py for the topo sort). Libraries with a
+        # `restart` list return their downstream services; apps with
+        # `depends_on` return the full stop-order chain. Passing this
+        # list to transport.deploy() is what makes controller stop BEFORE
+        # csp_server goes down and come back up AFTER it's ready — same
+        # contract as the existing `push` command (cli.py:968).
+        from satdeploy.cli import get_services_to_manage  # late import — avoid cycle
+        services_to_manage = get_services_to_manage(config, app, app_config.service)
+        if services_to_manage:
+            step(f"services: {', '.join(s for _, s in services_to_manage)} "
+                 f"(stop order, dependents first)")
+
         # Transport deploy. Reuse the existing abstract `deploy()`; no
         # patch path in v1 (Lane A deferred).
         backup_dir = config.get_backup_dir(module_config.name)
@@ -264,6 +277,7 @@ def run_iterate(
                 remote_path=app_config.remote,
                 force=force,
                 expected_checksum=file_hash,
+                services=services_to_manage,
             )
             if module_config.transport == "csp":
                 deploy_kwargs.update(
