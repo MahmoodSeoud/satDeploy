@@ -1084,6 +1084,42 @@ def iterate(
 
 
 @main.command()
+@click.argument("apps", nargs=-1, type=AppNameType(), required=True)
+@click.option("--debounce", type=click.FloatRange(min=0.05, max=5.0),
+              default=0.3, show_default=True,
+              help="Per-app quiet window (s) before firing iterate")
+@config_option
+@target_option
+def watch(
+    apps: tuple[str, ...],
+    debounce: float,
+    config_path: Path | None,
+    target_name: str | None,
+):
+    """Watch one or more app source files and iterate on save.
+
+    The daily-loop hook. Save a file, satdeploy iterates. Debouncing
+    coalesces editor save-all bursts. Ctrl+C exits between iterates
+    (never mid-deploy — the in-flight iterate always runs to the
+    transport's atomic rename, so no torn files on the target).
+    """
+    from satdeploy import watch as watch_mod
+    config = load_config(config_path)
+    module_config = resolve_target(config, target_name)
+
+    def _step(msg: str) -> None:
+        click.echo(f"  {msg}")
+
+    watch_mod.run_watch(
+        config,
+        module_config,
+        list(apps),
+        debounce_s=debounce,
+        on_step=_step,
+    )
+
+
+@main.command()
 @config_option
 @target_option
 @node_option
