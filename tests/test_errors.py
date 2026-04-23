@@ -282,6 +282,18 @@ def test_format_message_without_fix_cmd_is_single_line():
     assert "\n" not in rendered.strip()
 
 
+def test_format_message_has_single_cross_prefix():
+    """Regression for DX review 2026-04-23: CLI was printing
+    ``✗ ✗ [EUNKNOWN] Local file not found: ...`` — two ✗ marks. The inner
+    format_message() prepended ``✗ [name]`` and then output.error() prepended
+    another ``✗``. Fix lives in errors.py:format_message (drop the inner ✗)."""
+    err = errors.UnknownError("file not found")
+    rendered = err.format_message()
+    # Exactly one ✗ in the head line.
+    head = rendered.splitlines()[0]
+    assert head.count("✗") == 1, f"Expected single ✗, got: {head!r}"
+
+
 def test_format_message_with_fix_cmd_shows_fix_line():
     err = errors.ABIError(
         "Target is missing library libparam.so.3",

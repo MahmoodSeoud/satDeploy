@@ -67,7 +67,9 @@ class TypedError(SatDeployError):
         self.eta = eta
 
     def format_message(self) -> str:
-        head = error(f"✗ [{self.typed_name}] {self.message}")
+        # Don't prefix "✗ " here — output.error() adds it. Double-prefix bug
+        # caught in DX review 2026-04-23 ("✗ ✗ [EUNKNOWN] ..." at CLI).
+        head = error(f"[{self.typed_name}] {self.message}")
         if not self.fix_cmd:
             return head
         eta_str = f" ({self.eta})" if self.eta else ""
