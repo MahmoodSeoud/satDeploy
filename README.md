@@ -21,23 +21,35 @@ satDeploy is what we built so it doesn't happen again. Every deploy is versioned
 
 ## Try it now
 
-Zero dependencies on your laptop beyond Python and git.
+Zero dependencies beyond Python 3.8+ and git.
 
 ```bash
-pipx install satdeploy   # or: pip install satdeploy
+# Not on PyPI yet — install from source while we polish for 1.0
+git clone https://github.com/MahmoodSeoud/satDeploy
+cd satDeploy
+pip install -e .
 satdeploy demo
 ```
 
-`satdeploy demo` sets up a throwaway git repo and a local target directory, then pre-installs `test_app` v1.0.0. Run the real product loop against it:
+`satdeploy demo` sets up a throwaway git repo, a local target directory, and a sample `test_app`, so you can exercise the whole loop on your laptop without any hardware.
+
+**The daily loop** — edit-to-running in one command:
 
 ```bash
-satdeploy status              # See what's deployed
-satdeploy push test_app       # Deploy v2 (new hash, new commit)
-satdeploy rollback test_app   # Undo in one command, git tag carries through
-satdeploy demo stop           # Tear it down when you're done
+satdeploy iterate test_app       # deploy → restart → health-check
+satdeploy watch test_app         # same loop, fires on every save
 ```
 
-The demo runs against a directory on your own machine instead of a satellite, so `test_app` (a small shell script the demo ships) executes right there on your laptop. Against real hardware, the binary lives on the target and you watch its effects there.
+**The safety net** — every deploy versioned, hash-verified, rollback-able:
+
+```bash
+satdeploy status                 # what's running, which hash, which commit
+satdeploy list test_app          # all previous versions
+satdeploy rollback test_app      # undo to previous, in one command
+satdeploy demo stop              # tear it all down
+```
+
+The demo uses a local directory as the "target". Swap the config for SSH (below) to hit real hardware.
 
 ## Deploy to real hardware
 
