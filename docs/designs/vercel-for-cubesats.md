@@ -113,6 +113,7 @@ Imagine a YC partner in Q4 2026 watching the demo. They say "wait, nobody has th
 - **Slack/Discord webhook on iterate**. Delight item, Phase 1.
 - **`satdeploy whoami`** (state legibility in 1 command). Phase 1 delight item.
 - **Sysroot auto-fetch from build-artifact URL** (vs current spec: user-provided local SDK). Phase 1 UX polish.
+- **CSP-iterate (APM-native iterate/watch over CSP)** — Phase 1, pilot-gated. Decided 2026-04-22 via /plan-ceo-review: CSP teams (GomSpace/Space Inventor/ESA per Julian's leads) have real pain that iterate/watch attacks, but the Python+CSP path was closed at cd38042 for load-bearing reasons (libcsp-py3 maintenance tax) and should stay closed. The right home is satdeploy-apm in C: `iterate <app>` = push + bsdiff + health-check loop, ~1-2wk C work, reusing existing DTP + history.db writer. Gate on ≥1 Julian pilot asking for CSP support. Phase-0 pitch: "here's the wedge over SSH dev; here's the architecture for the CSP version we'll ship when you say yes." See `~/.gstack/projects/MahmoodSeoud-satDeploy/ceo-plans/2026-04-22-csp-iterate-phase1-decision.md` for full rationale + landscape research.
 
 ## Cross-Model Perspective
 

@@ -1,5 +1,52 @@
 # TODOS
 
+## CSP-iterate (APM-native iterate/watch over CSP)
+
+**What:** Implement `iterate <app>` and `watch <app>` semantics natively in
+satdeploy-apm (C, inside CSH). Same wedge as the Python CLI provides over SSH:
+push + bsdiff patch + health check + log streaming. Runs over CSP, uses existing
+DTP file transfer, writes history.db through the APM's existing writer.
+
+**Why:** CSP is the space-industry default transport (GomSpace, Space Inventor,
+Space Cubics — all maintainers of libcsp, all on Julian's pilot lead list). SSH
+doesn't work in orbit and rarely works on pre-flight CubeSats with CAN-only
+hardware. The iterate wedge is value-transport-independent; teams without SSH
+access currently get the pre-wedge experience (bare `satdeploy push` over CSH,
+no fast edit-to-running loop).
+
+**Why not now:** Decided 2026-04-22 via /plan-ceo-review. Three reasons: (1)
+Reversing cd38042 (Python+CSP) is wrong — that architectural decision was
+load-bearing and ongoing maintenance tax was the reason it shipped. (2) Building
+APM-iterate in C burns ~1-2wk against a 0-slack thesis timeline and re-opens
+every eng-review landmine (P0 #1-4) in a harder language. (3) Phase 0 exists to
+validate the wedge with pilots, not to ship full coverage. Julian outreach is
+the cheapest way to learn whether CSP teams will pay — if ≥1 pilot says "we need
+this on CSP," that's pre-sold Phase 1; if they shrug, you saved the 2 weeks.
+
+**Context:** The APM already owns CSP (per 2026-04-17 "Python=SSH, C=CSP Boundary"
+plan). It already has `satdeploy push/status/rollback/list/logs` working over
+CSP/DTP and writes to the shared history.db. Adding iterate is additive: agent
+receives DEPLOY command, applies bsdiff patch, health-checks via libparam, logs
+back through CSP. Watch would live on the ground side in CSH — watchdog-style
+file monitoring firing iterate on save. Same semantics, different transport.
+
+**Gating signal:** ≥1 Julian outreach pilot explicitly asks for CSP support, OR
+a Phase-0 evaluation reveals CSP-only teams can't use the tool at all. Landscape
+research (2026-04-22) confirmed CSP teams desperately need the STICK (rollback
++ audit + validate) more than the wedge; the wedge is the pitch-winner.
+
+**Effort estimate:** human ~2 weeks / CC ~2-3 days of concentrated C work.
+Reuses existing DTP + history writer + backup logic in agent. New surface: port
+the bsdiff-patch apply path from satdeploy/bsdiff.py to C, add iterate command
+to APM slash command dispatcher, wire to existing agent DEPLOY handler.
+
+**Priority:** P2 — important but Phase 1 (post-thesis submit end-June 2026).
+Revisit after Julian's pilot responses land.
+
+**Depends on:** bsdiff patch format stability (already locked via `bsdiff4==1.2.3`
+pin + Week 1 feasibility test). APM history.db writer (already shipped per
+Phase 2 of 2026-04-17 plan).
+
 ## C Unit Test Framework for satdeploy-agent
 
 **What:** Set up cmocka or Unity test framework for satdeploy-agent C code.
