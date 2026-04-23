@@ -1656,6 +1656,75 @@ def rollback(
 
 
 @main.command()
+@click.argument("apps", nargs=-1, type=AppNameType())
+@click.option("--for", "mode",
+              type=click.Choice(["all", "iterate", "watch", "debug", "push"]),
+              default="all", show_default=True,
+              help="Which workflow to pre-flight check")
+@config_option
+@target_option
+def doctor(
+    apps: tuple[str, ...],
+    mode: str,
+    config_path: Path | None,
+    target_name: str | None,
+):
+    """Pre-flight check — validate setup before iterate/push fails mid-flight.
+
+    Runs a series of checks against your config, target, local files, and
+    remote state. Each check says pass/warn/fail with a suggested fix
+    command on failure. Exits 1 if any check fails.
+
+    Examples:
+
+      satdeploy doctor                              # full check, all apps
+      satdeploy doctor --for iterate controller     # iterate prereqs only
+      satdeploy doctor --for debug controller       # gdb path prereqs
+      satdeploy doctor --for watch                  # file-watcher prereqs
+    """
+    from satdeploy import doctor as doctor_mod
+
+    cfg = load_config(config_path)
+    module = resolve_target(cfg, target_name)
+    app_list = list(apps) if apps else list(cfg.apps.keys())
+
+    def _emit(result: doctor_mod.CheckResult) -> None:
+        if result.status == doctor_mod.CheckStatus.PASS:
+            prefix = click.style("✓", fg="green")
+            click.echo(f"  {prefix} {result.name}: {result.message}")
+        elif result.status == doctor_mod.CheckStatus.WARN:
+            prefix = click.style("⚠", fg="yellow")
+            click.echo(f"  {prefix} {result.name}: {result.message}")
+            if result.fix_cmd:
+                click.echo(dim(f"    → {result.fix_cmd}"))
+        else:
+            prefix = click.style("✗", fg="red")
+            click.echo(f"  {prefix} {result.name}: {result.message}")
+            if result.fix_cmd:
+                click.echo(dim(f"    → {result.fix_cmd}"))
+
+    click.echo(f"satdeploy doctor --for {mode} "
+               f"(target: {module.name}, transport: {module.transport})")
+    click.echo("")
+    summary = doctor_mod.run_doctor(cfg, module, app_list, mode=mode, on_result=_emit)
+    click.echo("")
+
+    summary_line = f"{summary.passed} passed"
+    if summary.warned:
+        summary_line += f", {summary.warned} warning{'s' if summary.warned != 1 else ''}"
+    if summary.failed:
+        summary_line += f", {summary.failed} failed"
+
+    if summary.ok:
+        click.echo(success(summary_line))
+    else:
+        click.echo(warning(summary_line))
+        click.echo(dim("Fix the ✗ lines above, then re-run `satdeploy doctor`."))
+        ctx = click.get_current_context()
+        ctx.exit(1)
+
+
+@main.command()
 @config_option
 @target_option
 def config(config_path: Path | None, target_name: str | None):
