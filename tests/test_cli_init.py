@@ -29,7 +29,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config", str(config_dir / "config.yaml")],
-            input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
+            input="\n192.168.1.50\nroot\n",  # name(default), host, user
         )
 
         assert result.exit_code == 0
@@ -43,7 +43,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config", str(config_dir / "config.yaml")],
-            input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
+            input="\n192.168.1.50\nroot\n",
         )
 
         assert "host" in result.output.lower() or "Target host" in result.output
@@ -56,7 +56,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config", str(config_dir / "config.yaml")],
-            input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
+            input="\n192.168.1.50\nroot\n",
         )
 
         assert "user" in result.output.lower()
@@ -69,7 +69,7 @@ class TestInitCommand:
         runner.invoke(
             main,
             ["init", "--config", str(config_dir / "config.yaml")],
-            input="som1\n\n10.0.0.100\nadmin\n",  # name, transport(ssh), host, user
+            input="som1\n10.0.0.100\nadmin\n",  # name, host, user
         )
 
         config_file = config_dir / "config.yaml"
@@ -88,7 +88,7 @@ class TestInitCommand:
         runner.invoke(
             main,
             ["init", "--config", str(config_dir / "config.yaml")],
-            input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
+            input="\n192.168.1.50\nroot\n",
         )
 
         config_file = config_dir / "config.yaml"
@@ -98,27 +98,25 @@ class TestInitCommand:
         assert config["max_backups"] == 10
         assert "example_app" in config["apps"]
 
-    def test_init_csp_transport(self, tmp_path):
-        """Init should support CSP transport configuration."""
+    def test_init_does_not_prompt_for_csp(self, tmp_path):
+        """Post-cd38042 the Python CLI doesn't support transport=csp.
+        Init must not offer CSP — it would produce a config that fails
+        on push/iterate at cli.py:75. CSP teams use satdeploy-apm
+        inside CSH instead."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
 
-        runner.invoke(
+        result = runner.invoke(
             main,
             ["init", "--config", str(config_dir / "config.yaml")],
-            # name, csp, zmq_endpoint, agent_node, ground_node, appsys_node
-            input="sat1\ncsp\ntcp://localhost:4040\n5424\n4040\n10\n",
+            input="\n192.168.1.50\nroot\n",
         )
 
-        config_file = config_dir / "config.yaml"
-        config = yaml.safe_load(config_file.read_text())
-
-        assert config["name"] == "sat1"
-        assert config["transport"] == "csp"
-        assert config["zmq_endpoint"] == "tcp://localhost:4040"
-        assert config["agent_node"] == 5424
-        assert config["ground_node"] == 4040
-        assert config["appsys_node"] == 10
+        # No prompt should ask for transport or ZMQ endpoint.
+        assert "Transport type" not in result.output
+        assert "ZMQ endpoint" not in result.output
+        # The intro mentions CSP only to point users at the APM.
+        assert "satdeploy-apm" in result.output
 
     def test_init_warns_if_config_exists(self, tmp_path):
         """Init should warn if config already exists."""
@@ -143,10 +141,10 @@ class TestInitCommand:
         config_dir.mkdir()
         (config_dir / "config.yaml").write_text("name: old\nhost: old\nuser: old\n")
 
-        result = runner.invoke(
+        runner.invoke(
             main,
             ["init", "--config", str(config_dir / "config.yaml")],
-            input="y\n\n\n192.168.1.50\nroot\n",  # Overwrite, name(default), transport(ssh), host, user
+            input="y\n\n192.168.1.50\nroot\n",  # Overwrite, name(default), host, user
         )
 
         config = yaml.safe_load((config_dir / "config.yaml").read_text())
@@ -164,9 +162,26 @@ class TestInitPolishedOutput:
         result = runner.invoke(
             main,
             ["init", "--config", str(config_dir / "config.yaml")],
-            input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
+            input="\n192.168.1.50\nroot\n",
             color=True,
         )
 
         assert result.exit_code == 0
         assert SYMBOLS["check"] in result.output
+
+    def test_init_prints_next_steps(self, tmp_path):
+        """Init should end with a next-steps block pointing the user
+        at iterate + the SATDEPLOY_SDK env var for the ABI check."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+
+        result = runner.invoke(
+            main,
+            ["init", "--config", str(config_dir / "config.yaml")],
+            input="\n192.168.1.50\nroot\n",
+        )
+
+        assert result.exit_code == 0
+        assert "Next steps" in result.output
+        assert "satdeploy iterate" in result.output
+        assert "SATDEPLOY_SDK" in result.output

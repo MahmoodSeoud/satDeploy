@@ -509,7 +509,12 @@ def main():
 @main.command()
 @config_option
 def init(config_path: Path | None):
-    """Interactive setup, creates config.yaml."""
+    """Interactive setup for an SSH target — creates config.yaml.
+
+    The Python CLI owns SSH + local transports. For CSP (DTP over CAN /
+    radio, flight-hardware default), use satdeploy-apm inside CSH — see
+    the README's "CSP: the C path" section.
+    """
     config = Config(config_path=config_path)
 
     if config.config_path.exists():
@@ -518,61 +523,29 @@ def init(config_path: Path | None):
             return
 
     click.echo(click.style("Setting up satdeploy configuration...", bold=True))
+    click.echo(dim("  Creating an SSH target. For CSP targets, use "
+                   "satdeploy-apm inside CSH (see README)."))
     click.echo("")
 
     name = click.prompt("Target name", default="default")
-    transport = click.prompt(
-        "Transport type",
-        type=click.Choice(["ssh", "csp"]),
-        default="ssh",
-    )
+    host = click.prompt("Target host (IP or hostname)")
+    user = click.prompt("SSH user", default="root")
 
-    data = {"name": name, "transport": transport}
-
-    if transport == "ssh":
-        data["host"] = click.prompt("Target host (IP or hostname)")
-        data["user"] = click.prompt("SSH user", default="root")
-    else:  # csp
-        data["zmq_endpoint"] = click.prompt(
-            "ZMQ endpoint (zmqproxy host)",
-            default="tcp://localhost:9600",
-        )
-        data["agent_node"] = click.prompt(
-            "Agent CSP node",
-            type=int,
-            default=5425,
-        )
-        data["ground_node"] = click.prompt(
-            "Ground CSP node",
-            type=int,
-            default=40,
-        )
-        data["appsys_node"] = click.prompt(
-            "App-sys-manager CSP node",
-            type=int,
-            default=10,
-        )
-
-    data["backup_dir"] = "/opt/satdeploy/backups"
-    data["max_backups"] = 10
-
-    if transport == "ssh":
-        data["apps"] = {
+    data = {
+        "name": name,
+        "transport": "ssh",
+        "host": host,
+        "user": user,
+        "backup_dir": "/opt/satdeploy/backups",
+        "max_backups": 10,
+        "apps": {
             "example_app": {
                 "local": "/path/to/build/example_app",
                 "remote": "/opt/app/bin/example_app",
                 "service": "example_app.service",
-            }
-        }
-    else:
-        data["apps"] = {
-            "example_app": {
-                "local": "/path/to/build/example_app",
-                "remote": "/opt/app/bin/example_app",
-                "service": None,
-                "param": None,
-            }
-        }
+            },
+        },
+    }
 
     config.save(data)
 
@@ -586,7 +559,14 @@ def init(config_path: Path | None):
 
     click.echo("")
     click.echo(success(f"Config saved to {config.config_path}"))
-    click.echo(f"  Edit local and remote paths in {config.config_path}")
+    click.echo("")
+    click.echo("Next steps:")
+    click.echo(f"  1. Edit {config.config_path} — replace example_app.local "
+               f"and .remote with real paths")
+    click.echo(f"  2. Set SATDEPLOY_SDK=/path/to/yocto-sdk  "
+               f"# optional, enables ABI check in iterate")
+    click.echo(f"  3. satdeploy iterate example_app  "
+               f"# edit-to-running in one command")
 
     _install_completion()
 
