@@ -450,3 +450,25 @@ class Config:
         resolved = target_name if target_name is not None else self._default_target
         td = self._targets.get(resolved, {}) if resolved else {}
         return td.get("appsys", {}) or self._data.get("appsys", {}) or {}
+
+    def get_require_validated(self, target_name: Optional[str] = None) -> bool:
+        """Whether `push` should default-on the `--requires-validated` gate
+        for this target.
+
+        Per-target `push.require_validated` wins over top-level `push.
+        require_validated`. Default is False (the CLI flag is opt-in for
+        general targets and config-on for flight targets — see design-doc
+        Open Question #0). Returning True here just sets the *default*; the
+        explicit `--requires-validated` flag still wins, and there is no
+        config knob today to *suppress* a flag-set gate (paternalism risk
+        revisited with first pilot).
+        """
+        if self._data is None:
+            return False
+        resolved = target_name if target_name is not None else self._default_target
+        td = self._targets.get(resolved, {}) if resolved else {}
+        per_target = (td.get("push") or {}).get("require_validated")
+        if per_target is not None:
+            return bool(per_target)
+        top_level = (self._data.get("push") or {}).get("require_validated")
+        return bool(top_level)

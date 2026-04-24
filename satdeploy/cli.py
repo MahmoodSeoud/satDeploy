@@ -12,6 +12,7 @@ from satdeploy import __version__
 from satdeploy.config import DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_FILE, Config, ModuleConfig, AppConfig
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
+from satdeploy.errors import GateError
 from satdeploy.hash import compute_file_hash
 from satdeploy.provenance import capture_provenance, is_dirty, resolve_provenance
 from satdeploy.history import DeploymentRecord, History
@@ -661,6 +662,14 @@ def completion(install: bool, uninstall: bool):
     default=False,
     help="Refuse to deploy from a dirty git working tree",
 )
+@click.option(
+    "--requires-validated/--no-requires-validated",
+    "requires_validated_flag",
+    default=None,
+    help="Refuse to push a hash that has no PASS validation record for "
+         "this target. Defaults from per-target/top-level "
+         "`push.require_validated` config (off unless set).",
+)
 @config_option
 @target_option
 @node_option
@@ -671,6 +680,7 @@ def push(
     remote_override: str | None,
     force: bool,
     require_clean: bool,
+    requires_validated_flag: bool | None,
     config_path: Path | None,
     target_name: str | None,
     node_override: int | None,
@@ -778,6 +788,38 @@ def push(
             click.echo(warning(f"Deploying from uncommitted changes. File tagged as {provenance}"))
 
     history = get_history(config.history_path)
+
+    # ------------------------------------------------------------------
+    # Flight gate: refuse hashes that have no PASS validation row for
+    # (target, app, hash). Hard block by design (thesis metric #3).
+    # Open Question #0 of the design doc flagged paternalism risk; that
+    # gets revisited with first pilot. The flag wins over config; config
+    # only sets the default. Ad-hoc pushes are exempt — they have no app
+    # config and therefore no validate_command to run.
+    # ------------------------------------------------------------------
+    if requires_validated_flag is None:
+        gate_active = config.get_require_validated(module_config.name)
+    else:
+        gate_active = requires_validated_flag
+
+    if gate_active and not adhoc_mode:
+        for app_name in apps:
+            app_cfg = _get_app_cfg(app_name)
+            local_path_gate = expand_path(local or app_cfg.local) if len(apps) == 1 else expand_path(app_cfg.local)
+            file_hash = compute_file_hash(local_path_gate)
+            if not history.has_pass_record(
+                target=module_config.name,
+                app=app_name,
+                file_hash=file_hash,
+            ):
+                # Stable wording: the EGATE error matcher in errors.py
+                # keys on "Hash X has no PASS record" (line 303 there).
+                raise GateError(
+                    f"Hash {file_hash[:12]} has no PASS record for "
+                    f"{app_name} on {module_config.name}.",
+                    fix_cmd=f"satdeploy validate {app_name} --target {module_config.name}",
+                    eta="3s",
+                )
 
     # CSP and local transports: use transport abstraction
     if module_config.transport in ("csp", "local"):
