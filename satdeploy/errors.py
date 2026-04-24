@@ -51,7 +51,7 @@ class TypedError(SatDeployError):
     Renders as::
 
         ✗ [EABI] Target is missing required library libparam.so.3
-          → try: satdeploy sync-sysroot (12s)
+          → try: Rebuild against a Yocto SDK matching the target libc
 
     Subclasses set `typed_name` and `exit_code`. Instance fields `fix_cmd`
     and `eta` are filled at match time from the matching `ErrorEntry`.
@@ -162,28 +162,33 @@ class ErrorEntry:
 
 # Ordered. First match wins. More-specific patterns must precede more-general
 # ones. The specific class each entry routes to is derived from `exit_code`.
+#
+# TODO (design doc line 152): When `satdeploy sync-sysroot` ships, replace the
+# descriptive fix_cmd strings below with the one-command invocation. The 2026-
+# 04-23 DX review caught that earlier revisions referenced that unshipped
+# command; honest text ships until the implementation lands.
 ERRORS: List[ErrorEntry] = [
     # EABI -----------------------------------------------------------------
     ErrorEntry(
         pattern=re.compile(r"error while loading shared libraries: (?P<lib>\S+):"),
         exit_code=EABI,
         message="Target is missing required library {lib}.",
-        fix_cmd="satdeploy sync-sysroot",
-        eta="12s",
+        fix_cmd="Add {lib} to the target Yocto image, or rebuild against a SDK that bundles it.",
+        eta=None,
     ),
     ErrorEntry(
         pattern=re.compile(r"version `(?P<version>GLIBC_[^']+)' not found"),
         exit_code=EABI,
         message="Symbol version {version} not present on target libc.",
-        fix_cmd="satdeploy sync-sysroot",
-        eta="12s",
+        fix_cmd="Rebuild against a Yocto SDK whose glibc matches the target.",
+        eta=None,
     ),
     ErrorEntry(
         pattern=re.compile(r"undefined symbol: (?P<symbol>\S+)"),
         exit_code=EABI,
         message="Undefined symbol {symbol} on target — ABI drift.",
-        fix_cmd="satdeploy sync-sysroot",
-        eta="12s",
+        fix_cmd="Rebuild against the SDK matching the target's library ABI. Set $SATDEPLOY_SDK to pin it.",
+        eta=None,
     ),
 
     # ETRANSFER ------------------------------------------------------------
@@ -261,15 +266,15 @@ ERRORS: List[ErrorEntry] = [
         pattern=re.compile(r"No prebuilt sysroot for hash (?P<hash>\w+)"),
         exit_code=ESYSROOT,
         message="No prebuilt sysroot for manifest hash {hash}.",
-        fix_cmd="export SATDEPLOY_SDK=/path/to/sdk  # or: satdeploy sysroot publish",
-        eta="30s",
+        fix_cmd="Set $SATDEPLOY_SDK to the SDK matching manifest hash {hash}.",
+        eta=None,
     ),
     ErrorEntry(
         pattern=re.compile(r"(?:sysroot|manifest hash).*(?:stale|unknown|not found)", re.I),
         exit_code=ESYSROOT,
         message="Target sysroot is unknown or stale.",
-        fix_cmd="satdeploy sync-sysroot",
-        eta="12s",
+        fix_cmd="Set $SATDEPLOY_SDK to the SDK matching the target's current Yocto build.",
+        eta=None,
     ),
 
     # EDEBUG ---------------------------------------------------------------
@@ -277,7 +282,7 @@ ERRORS: List[ErrorEntry] = [
         pattern=re.compile(r"debuginfod.*(?:port|address).*(?:in use|busy|bind)", re.I),
         exit_code=EDEBUG,
         message="debuginfod port already in use by another process.",
-        fix_cmd="satdeploy debuginfod stop",
+        fix_cmd="satdeploy dev debuginfod stop",
         eta="1s",
     ),
     ErrorEntry(
@@ -288,9 +293,12 @@ ERRORS: List[ErrorEntry] = [
         eta=None,
     ),
 
-    # EGATE (Week 5 feature; entry lives here so it matches the moment the
-    # feature ships. Harmless as a placeholder — pattern won't fire until
-    # `satdeploy push --strict` emits this stderr.)
+    # EGATE — coupled ship. Pattern only fires when `push --requires-validated`
+    # emits "Hash X has no PASS record" stderr. `satdeploy validate` and
+    # `push --requires-validated` ship together (DX review 2026-04-23 Tier 1
+    # decision #11); the fix_cmd below resolves at the same moment the
+    # pattern starts firing. If either ships alone, flip fix_cmd back to
+    # honest text the same way the EABI entries were handled.
     ErrorEntry(
         pattern=re.compile(r"Hash (?P<hash>[0-9a-f]+) has no PASS record"),
         exit_code=EGATE,

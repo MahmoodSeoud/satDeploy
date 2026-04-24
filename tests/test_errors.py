@@ -297,14 +297,54 @@ def test_format_message_has_single_cross_prefix():
 def test_format_message_with_fix_cmd_shows_fix_line():
     err = errors.ABIError(
         "Target is missing library libparam.so.3",
-        fix_cmd="satdeploy sync-sysroot",
+        fix_cmd="Rebuild against a Yocto SDK matching the target libc.",
         eta="12s",
     )
     rendered = err.format_message()
     assert "EABI" in rendered
-    assert "satdeploy sync-sysroot" in rendered
+    assert "Rebuild against a Yocto SDK" in rendered
     assert "12s" in rendered
     assert "\n" in rendered  # fix line lives on its own row
+
+
+def test_no_production_fix_cmd_references_broken_satdeploy_commands():
+    """Regression for DX review 2026-04-23 + 2026-04-24 audit: fix_cmd
+    strings in errors.py must reference commands that actually exist in
+    the CLI registry.
+
+    Two classes of bug this test catches:
+
+    1. Unshipped commands (e.g. ``satdeploy sync-sysroot`` — design doc
+       line 152, never implemented). The pre-fix ERRORS table referenced
+       it for 5 ABI/sysroot failures.
+    2. Wrong-namespace commands (e.g. ``satdeploy debuginfod stop`` — the
+       2026-04-24 ``dev`` subgroup refactor moved it to
+       ``satdeploy dev debuginfod stop`` but the fix_cmd wasn't updated).
+
+    Pilots who copy a broken fix_cmd, run it, and see
+    ``No such command`` lose trust in every other error message too. The
+    damage is out of proportion to the typo.
+
+    The EGATE entry references ``satdeploy validate`` and ships coupled
+    with that command per Tier 1 decision #11 — excluded here and
+    checked by an explicit comment in errors.py."""
+    # Known-broken strings that used to appear. Add to this list any
+    # time an audit uncovers a new class.
+    broken_references = (
+        "satdeploy sync-sysroot",
+        "satdeploy debuginfod ",  # trailing space: top-level, not `dev debuginfod`
+    )
+    for entry in errors.ERRORS:
+        if entry.fix_cmd is None:
+            continue
+        # Skip the known-coupled EGATE entry.
+        if entry.exit_code == errors.EGATE:
+            continue
+        for broken in broken_references:
+            assert broken not in entry.fix_cmd, (
+                f"ERRORS entry {entry.pattern.pattern!r} references the "
+                f"broken command string {broken!r} in fix_cmd={entry.fix_cmd!r}."
+            )
 
 
 def test_format_message_fix_cmd_without_eta():

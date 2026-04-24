@@ -323,7 +323,10 @@ def test_run_watch_swallows_iterate_typed_error(fake_config, fake_module, tmp_bi
 
     def _iterate(config, module_config, app, on_step=None):
         calls[0] += 1
-        raise errors.ABIError("missing libparam.so.3", fix_cmd="satdeploy sync-sysroot")
+        raise errors.ABIError(
+            "missing libparam.so.3",
+            fix_cmd="Rebuild against a SDK matching the target libc.",
+        )
 
     # Directly pump an event into the drain queue — no need for the
     # observer to actually fire.

@@ -174,7 +174,7 @@ def _start_local_debuginfod(sysroots: Path) -> str:
         # Route through errors.py so the user sees the typed EDEBUG path.
         raise errors.DebugError(
             str(e),
-            fix_cmd="satdeploy debuginfod stop  # then retry",
+            fix_cmd="satdeploy dev debuginfod stop  # then retry",
         )
     return debuginfod_module.DEBUGINFOD_URL
 

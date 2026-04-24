@@ -159,8 +159,13 @@ def test_check_raises_abi_error_with_fix_command(tmp_path):
     err = excinfo.value
     assert err.exit_code == errors.EABI
     assert "libparam.so.3" in err.message
-    assert err.fix_cmd == "satdeploy sync-sysroot"
-    assert err.eta == "12s"
+    # DX review 2026-04-23: abi.check() used to emit
+    # ``fix_cmd="satdeploy sync-sysroot"`` but that command isn't shipped
+    # yet. Assert the honest replacement text instead, and confirm the
+    # broken reference is gone.
+    assert "sync-sysroot" not in (err.fix_cmd or "")
+    assert "libparam.so.3" in (err.fix_cmd or "")
+    assert err.eta is None
 
 
 def test_check_message_uses_plural_for_multiple_missing(tmp_path):

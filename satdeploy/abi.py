@@ -4,7 +4,10 @@ Design doc (`docs/designs/vercel-for-cubesats.md`, line 71):
 
     Before upload, diff DT_NEEDED + symbol versions of local binary vs
     target sysroot. Fail loudly with "missing libparam.so.3 on target;
-    run satdeploy sync-sysroot or install libparam."
+    rebuild against a matching SDK or add libparam to the Yocto image."
+
+When `satdeploy sync-sysroot` ships (design doc line 152), the ABIError
+fix_cmd below should flip to the one-command invocation.
 
 Why this matters: iterate's gif demo dies the moment you push a binary
 linked against a libparam ABI the target doesn't have. Debugging "service
@@ -132,6 +135,6 @@ def check(
     plural = "libraries" if len(missing) > 1 else "library"
     raise ABIError(
         f"Target sysroot missing {plural}: {names}",
-        fix_cmd="satdeploy sync-sysroot",
-        eta="12s",
+        fix_cmd=f"Add {names} to the target Yocto image, or point $SATDEPLOY_SDK at the SDK matching this binary's build.",
+        eta=None,
     )
