@@ -1,6 +1,11 @@
 """Tests for CLI output formatting."""
 
+import os
+import stat
+
 import click
+import pytest
+from click.testing import CliRunner
 
 from satdeploy.output import (
     SYMBOLS,
@@ -9,6 +14,7 @@ from satdeploy.output import (
     error,
     format_relative_time,
     normalize_timestamp,
+    shadow_binary_hint,
     step,
     success,
     warning,
@@ -148,3 +154,99 @@ class TestFormatRelativeTime:
         from datetime import datetime, timedelta
         past = (datetime.now() - timedelta(hours=3)).isoformat()
         assert format_relative_time(past) == "3h ago"
+
+
+# ---------------------------------------------------------------------------
+# Shadow-binary hint (DX review 2026-04-23, decision #1)
+# ---------------------------------------------------------------------------
+#
+# When a user runs a newer `satdeploy` command that an older system-wide
+# install is shadowing via PATH, Click's default "No such command" error
+# leaves the user stuck. ColoredGroup now appends a hint listing every
+# `satdeploy` binary on PATH so the user can spot the shadow themselves.
+
+
+def _make_fake_binary(path):
+    """Write a minimal executable file at path and make it exec+r."""
+    path.write_text("#!/bin/sh\nexit 0\n")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IRUSR)
+
+
+class TestShadowBinaryHint:
+    def test_returns_none_when_no_satdeploy_on_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PATH", str(tmp_path))
+        assert shadow_binary_hint() is None
+
+    def test_returns_none_with_single_binary(self, tmp_path, monkeypatch):
+        _make_fake_binary(tmp_path / "satdeploy")
+        monkeypatch.setenv("PATH", str(tmp_path))
+        assert shadow_binary_hint() is None
+
+    def test_fires_when_two_distinct_binaries_on_path(self, tmp_path, monkeypatch):
+        venv = tmp_path / "venv" / "bin"
+        system = tmp_path / "usr" / "local" / "bin"
+        venv.mkdir(parents=True)
+        system.mkdir(parents=True)
+        _make_fake_binary(venv / "satdeploy")
+        _make_fake_binary(system / "satdeploy")
+        monkeypatch.setenv("PATH", f"{venv}{os.pathsep}{system}")
+        hint = shadow_binary_hint()
+        assert hint is not None
+        assert str(venv / "satdeploy") in hint
+        assert str(system / "satdeploy") in hint
+        assert "PATH is resolving to the wrong one" in hint
+
+    def test_dedupes_same_realpath(self, tmp_path, monkeypatch):
+        """Two PATH entries pointing at the same file (via symlink) are
+        still one install — don't falsely hint."""
+        target_dir = tmp_path / "real"
+        target_dir.mkdir()
+        _make_fake_binary(target_dir / "satdeploy")
+        link_dir = tmp_path / "symlinked"
+        link_dir.symlink_to(target_dir)
+        monkeypatch.setenv("PATH", f"{target_dir}{os.pathsep}{link_dir}")
+        # Two PATH entries, one real binary. Hint should NOT fire.
+        assert shadow_binary_hint() is None
+
+
+class TestColoredGroupNoSuchCommand:
+    def test_usage_error_includes_shadow_hint_when_multiple_binaries(
+        self, tmp_path, monkeypatch
+    ):
+        venv = tmp_path / "venv" / "bin"
+        system = tmp_path / "usr" / "local" / "bin"
+        venv.mkdir(parents=True)
+        system.mkdir(parents=True)
+        _make_fake_binary(venv / "satdeploy")
+        _make_fake_binary(system / "satdeploy")
+        monkeypatch.setenv("PATH", f"{venv}{os.pathsep}{system}")
+
+        @click.group(cls=ColoredGroup)
+        def cli():
+            pass
+
+        @cli.command()
+        def known():  # pragma: no cover - registered but not invoked
+            pass
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["nonexistent"])
+        assert result.exit_code != 0
+        # Click's standard "No such command" preserved...
+        assert "No such command" in result.output
+        # ...and the hint is appended.
+        assert "different `satdeploy` binaries" in result.output
+
+    def test_usage_error_clean_when_no_shadow(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PATH", str(tmp_path))  # empty
+
+        @click.group(cls=ColoredGroup)
+        def cli():
+            pass
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["nonexistent"])
+        assert result.exit_code != 0
+        assert "No such command" in result.output
+        # No hint when there's nothing to hint about.
+        assert "different `satdeploy` binaries" not in result.output

@@ -8,9 +8,11 @@ inline click.echo with \\t and string padding.
 
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, List, Optional, Sequence
 
 import click
 
@@ -481,8 +483,78 @@ def _style_exception(e: click.ClickException) -> None:
     e.show = custom_show
 
 
+def _find_satdeploy_binaries_on_path() -> List[str]:
+    """Return every `satdeploy` binary found on $PATH, in PATH order, deduped by realpath.
+
+    Used by the shadow-binary hint: when a user runs `satdeploy iterate`
+    (or any other command) and sees `No such command`, the most common
+    cause is that an older `/usr/local/bin/satdeploy` is shadowing the
+    venv install they just did. DX review 2026-04-23 flagged this as the
+    #1 silent footgun in onboarding.
+    """
+    path_dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    seen_real: set[str] = set()
+    unique: List[str] = []
+    for d in path_dirs:
+        cand = os.path.join(d, "satdeploy")
+        if not (os.path.isfile(cand) and os.access(cand, os.X_OK)):
+            continue
+        try:
+            rp = os.path.realpath(cand)
+        except OSError:
+            continue
+        if rp in seen_real:
+            continue
+        seen_real.add(rp)
+        unique.append(cand)
+    return unique
+
+
+def shadow_binary_hint() -> Optional[str]:
+    """Return a user-facing hint if >1 distinct `satdeploy` binaries are on $PATH.
+
+    None when the hint isn't useful (no PATH conflict detected). The
+    classic trigger is `/usr/local/bin/satdeploy` (old system install)
+    shadowing a newer `.venv/bin/satdeploy` when the venv isn't active.
+    """
+    binaries = _find_satdeploy_binaries_on_path()
+    if len(binaries) <= 1:
+        return None
+    running = sys.argv[0] if sys.argv else "satdeploy"
+    lines = [f"Found {len(binaries)} different `satdeploy` binaries on your PATH:"]
+    for b in binaries:
+        marker = "  ← invoked" if os.path.realpath(b) == os.path.realpath(running) else ""
+        lines.append(f"  {b}{marker}")
+    lines.append("")
+    lines.append(
+        "If this command exists in one of the other installs, your PATH is "
+        "resolving to the wrong one. Activate your venv, or reinstall with "
+        "`pip install --force-reinstall`."
+    )
+    return "\n".join(lines)
+
+
 class ColoredGroup(click.Group):
-    """Custom Click group that displays all errors in red."""
+    """Custom Click group that displays all errors in red.
+
+    Also wraps "No such command" UsageErrors with a shadow-binary hint
+    when multiple `satdeploy` binaries exist on $PATH. See
+    `shadow_binary_hint` for the DX context.
+    """
+
+    def resolve_command(self, ctx, args):
+        try:
+            return super().resolve_command(ctx, args)
+        except click.UsageError as exc:
+            msg = exc.format_message()
+            if "No such command" not in msg:
+                raise
+            hint = shadow_binary_hint()
+            if hint is None:
+                raise
+            # Re-raise with the hint appended so the user sees it alongside
+            # Click's default "did you mean" suggestion (if any).
+            raise click.UsageError(f"{msg}\n\n{hint}", ctx=exc.ctx) from None
 
     def invoke(self, ctx):
         try:
