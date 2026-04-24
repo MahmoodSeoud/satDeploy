@@ -2,6 +2,8 @@
 
 The Python CLI handles SSH deployments. The CSH APM handles CSP deployments. Both provide the same five commands (`push`, `status`, `list`, `rollback`, `logs`) and write to the same history database.
 
+> Every target-aware command accepts `-t/--target NAME` and reads `SATDEPLOY_TARGET` from the environment when the flag is absent. See [Multi-target](#multi-target-fleet) below for the fleet config shape.
+
 ## push: Deploy files to target
 
 ```
@@ -89,11 +91,51 @@ eval "$(_SATDEPLOY_COMPLETE=bash_source satdeploy)"
 eval "$(_SATDEPLOY_COMPLETE=zsh_source satdeploy)"
 ```
 
+## Multi-target (fleet)
+
+A single config can hold multiple targets. Target-aware commands (`push`, `iterate`, `watch`, `status`, `list`, `rollback`, `logs`, `config`) accept `-t/--target NAME` to pick one; omitting it uses `default_target` (or the first `targets:` entry). Shell completion knows the names.
+
+```yaml
+# ~/.satdeploy/config.yaml
+default_target: som1
+
+targets:
+  som1:
+    transport: ssh
+    host: 192.168.1.50
+    user: root
+  som2:
+    transport: ssh
+    host: 192.168.1.51
+    user: root
+  flight:
+    transport: csp
+    zmq_endpoint: tcp://localhost:9600
+    agent_node: 5425
+
+apps:
+  controller:
+    local: ./build/controller
+    remote: /opt/bin/controller
+    service: controller.service
+```
+
+```bash
+satdeploy push controller --target som2
+satdeploy iterate controller -t som1
+SATDEPLOY_TARGET=som1 satdeploy status
+```
+
+Per-target `backup_dir` is resolved via `Config.get_backup_dir(target_name)`; defaults are sensible for `local`, `ssh`, and `csp` transports. The history database (and the `satdeploy dev dashboard`) key rows by target so deploys never leak across modules.
+
+Single-target (flat) configs still work unchanged — the loader lifts them into a one-entry `targets` dict internally.
+
 ## Global flags
 
 All commands accept:
 
 | Flag | Description |
 |------|-------------|
-| `-n, --node NUM` | Target CSP node (overrides `agent_node` from config) |
-| `--config PATH` | Config file (default: `~/.satdeploy/config.yaml`) |
+| `-t, --target NAME` | Target name (reads `SATDEPLOY_TARGET` env var when absent) |
+| `-n, --node NUM` | Override the target's CSP node (`agent_node`) |
+| `--config PATH` | Config file (default: `~/.satdeploy/config.yaml`; reads `SATDEPLOY_CONFIG` env var) |

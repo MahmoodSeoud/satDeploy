@@ -94,6 +94,44 @@ satdeploy rollback controller        # undo
 satdeploy logs controller            # service logs
 ```
 
+### Multiple targets (fleet)
+
+A single config can hold several targets. Every target-aware command takes `-t/--target NAME`; `SATDEPLOY_TARGET` sets the default per shell. `satdeploy demo` itself spawns two local targets (`som1`, `som2`) so you can try it without edits.
+
+```yaml
+# ~/.satdeploy/config.yaml
+default_target: som1       # used when --target is not passed
+
+targets:
+  som1:
+    transport: ssh
+    host: 192.168.1.50
+    user: root
+  som2:
+    transport: ssh
+    host: 192.168.1.51
+    user: root
+  flight:
+    transport: csp          # handled by the APM, not the Python CLI
+    zmq_endpoint: tcp://localhost:9600
+    agent_node: 5425
+
+apps:                       # apps are shared across targets
+  controller:
+    local: ./build/controller
+    remote: /opt/bin/controller
+    service: controller.service
+```
+
+```bash
+satdeploy push controller --target som2     # one target
+SATDEPLOY_TARGET=som1 satdeploy iterate controller
+satdeploy status                            # all targets (dashboard-style)
+satdeploy status --target flight            # one target, detailed
+```
+
+Per-target backups live under each target's `backup_dir` (configurable, defaults sensibly for local/SSH/CSP). The dashboard (`satdeploy dev dashboard`) groups deploys by target.
+
 ### CSP (air-gapped target, CAN/serial)
 
 For air-gapped targets reachable only over CSP (CAN bus, KISS serial, ZMQ), use the **satdeploy-apm** C module inside [CSH](https://github.com/spaceinventor/csh). The Python CLI handles SSH only. CSP networking is handled natively in C by the APM, which talks directly to `satdeploy-agent` on the target.
