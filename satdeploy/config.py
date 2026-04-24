@@ -72,6 +72,15 @@ class AppConfig:
     # CSP-specific fields for libparam control
     param: str | None = None  # libparam name (e.g., "mng_dipp")
 
+    # Validation: shell command run on the target by `satdeploy validate`.
+    # Optional — apps without it cannot be validated and therefore cannot
+    # pass `push --requires-validated`. Interpreted by the target shell.
+    validate_command: str | None = None
+    # Hard timeout (seconds) for the validate run. Default 300s; design-doc
+    # Phase-0 thesis metric #3 wants validate to be a binary signal, not
+    # something that hangs forever in CI.
+    validate_timeout_seconds: int = 300
+
 DEFAULT_CONFIG_DIR = Path.home() / ".satdeploy"
 DEFAULT_CONFIG_FILE = DEFAULT_CONFIG_DIR / "config.yaml"
 
@@ -373,6 +382,8 @@ class Config:
             service_template=app_data.get("service_template"),
             vmem_dir=app_data.get("vmem_dir"),
             param=app_data.get("param"),
+            validate_command=app_data.get("validate_command"),
+            validate_timeout_seconds=app_data.get("validate_timeout_seconds", 300),
         )
 
     @property

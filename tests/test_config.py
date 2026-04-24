@@ -675,6 +675,107 @@ class TestCSPAppConfig:
         assert app.param == "mng_dipp"
 
 
+class TestValidateCommandConfig:
+    """Per-app `validate_command` field — feeds `satdeploy validate`."""
+
+    def test_validate_command_round_trips_from_yaml(self, tmp_path):
+        """validate_command in YAML reaches AppConfig.validate_command."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
+            "apps": {
+                "controller": {
+                    "local": "./build/controller",
+                    "remote": "/opt/disco/bin/controller",
+                    "service": "controller.service",
+                    "validate_command": "/opt/disco/tests/run.sh",
+                },
+            },
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_path=tmp_path / "config.yaml")
+        config.load()
+        app = config.get_app("controller")
+
+        assert app.validate_command == "/opt/disco/tests/run.sh"
+
+    def test_validate_command_defaults_to_none(self, tmp_path):
+        """Apps without validate_command get None — they are unvalidatable."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
+            "apps": {
+                "lib": {
+                    "local": "./build/libfoo.so",
+                    "remote": "/usr/lib/libfoo.so",
+                },
+            },
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_path=tmp_path / "config.yaml")
+        config.load()
+        app = config.get_app("lib")
+
+        assert app.validate_command is None
+
+    def test_validate_timeout_defaults_to_300(self, tmp_path):
+        """Default validate timeout is 300s when not specified."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
+            "apps": {
+                "controller": {
+                    "local": "./build/controller",
+                    "remote": "/opt/disco/bin/controller",
+                    "validate_command": "true",
+                },
+            },
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_path=tmp_path / "config.yaml")
+        config.load()
+        app = config.get_app("controller")
+
+        assert app.validate_timeout_seconds == 300
+
+    def test_validate_timeout_can_be_overridden(self, tmp_path):
+        """validate_timeout_seconds in YAML reaches AppConfig."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
+            "apps": {
+                "controller": {
+                    "local": "./build/controller",
+                    "remote": "/opt/disco/bin/controller",
+                    "validate_command": "/opt/disco/tests/long_run.sh",
+                    "validate_timeout_seconds": 60,
+                },
+            },
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_path=tmp_path / "config.yaml")
+        config.load()
+        app = config.get_app("controller")
+
+        assert app.validate_timeout_seconds == 60
+
+
 class TestGetAppsys:
     """Test get_appsys() method."""
 
