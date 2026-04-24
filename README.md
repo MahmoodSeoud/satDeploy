@@ -21,15 +21,25 @@ satDeploy is what we built so it doesn't happen again. Every deploy is versioned
 
 ## Try it now
 
-Zero dependencies beyond Python 3.8+ and git.
+Zero dependencies beyond Python 3.8+ and git. One command from zero to a working demo:
 
 ```bash
-# Not on PyPI yet — install from source while we polish for 1.0
-git clone https://github.com/MahmoodSeoud/satDeploy
-cd satDeploy
+pipx install git+https://github.com/MahmoodSeoud/satDeploy@v0.4.0
+satdeploy demo
+```
+
+Don't have `pipx`? `python3 -m pip install --user pipx && python3 -m pipx ensurepath` gets you there. It's what handles PEP 668 on recent Linux so you don't have to set up a venv by hand.
+
+Prefer a venv for development? Clone + editable install still works:
+
+```bash
+git clone https://github.com/MahmoodSeoud/satDeploy && cd satDeploy
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 satdeploy demo
 ```
+
+> **Not on PyPI yet.** We're deliberately holding the tag-only install path until the config schema stabilises and the first pilot has landed — avoids version-yank pain while `iterate`, `validate`, and CSP-iterate are still moving. `pipx install git+…@vX.Y.Z` gives you the same one-line UX.
 
 `satdeploy demo` sets up a throwaway git repo, a local target directory, and a sample `test_app`, so you can exercise the whole loop on your laptop without any hardware.
 
