@@ -15,6 +15,7 @@ from satdeploy.deployer import Deployer
 from satdeploy.hash import compute_file_hash
 from satdeploy.provenance import capture_provenance, is_dirty, resolve_provenance
 from satdeploy.history import DeploymentRecord, History
+from satdeploy import validate as validate_module
 from satdeploy.output import (
     ColoredGroup,
     PushStep,
@@ -1856,6 +1857,103 @@ def config(config_path: Path | None, target_name: str | None):
     cfg = load_config(config_path)
     module = resolve_target(cfg, target_name)
     click.echo(render_config_block(cfg=cfg, module=module))
+
+
+@main.command()
+@click.argument("app", type=APP_NAME)
+@click.option(
+    "--local",
+    type=click.Path(exists=False),
+    default=None,
+    help="Local file path used to compute the validated hash (overrides config)",
+)
+@config_option
+@target_option
+def validate(
+    app: str,
+    local: str | None,
+    config_path: Path | None,
+    target_name: str | None,
+):
+    """Run an app's validate_command on the target and record PASS/FAIL.
+
+    Part of the iterate → validate → push lifecycle. The recorded hash
+    keys the `push --requires-validated` flight gate; a PASS on one
+    target does NOT satisfy the gate on another (R1 fleet contract).
+    """
+    config = load_config(config_path)
+    module_config = resolve_target(config, target_name)
+    app_config = get_app_config_or_error(config, app)
+
+    if not app_config.validate_command:
+        raise SatDeployError(
+            f"App '{app}' has no validate_command in config. "
+            f"Add `validate_command: ./tests/run.sh` to apps.{app} to enable "
+            f"`satdeploy validate {app}`."
+        )
+
+    local_path = expand_path(local or app_config.local)
+    if not os.path.exists(local_path):
+        raise SatDeployError(f"Local file not found: {local_path}")
+
+    file_hash = compute_file_hash(local_path)
+    backup_dir = config.get_backup_dir(module_config.name)
+    transport = get_transport(module_config, backup_dir, apps={
+        name: {"remote": cfg.get("remote", ""), "service": cfg.get("service")}
+        for name, cfg in config.apps.items()
+    } if config.apps else None)
+
+    history = get_history(config.history_path)
+
+    click.echo(dim(
+        f"  validating {app} ({file_hash[:8]}) on {module_config.name}: "
+        f"{app_config.validate_command}"
+    ))
+
+    try:
+        transport.connect()
+        try:
+            outcome = validate_module.run_validate(
+                transport,
+                target=module_config.name,
+                app=app,
+                command=app_config.validate_command,
+                file_hash=file_hash,
+                timeout=app_config.validate_timeout_seconds,
+                history=history,
+            )
+        finally:
+            transport.disconnect()
+    except TransportError as e:
+        # validate.run_validate already wrote a FAIL row before re-raising.
+        # Re-route through SatDeployError so click renders it consistently
+        # with the rest of the CLI's typed-error styling.
+        raise SatDeployError(
+            f"validate: tests timed out or transport failed for {app}: {e}"
+        )
+
+    duration_s = outcome.record.duration_ms / 1000.0
+    if outcome.passed:
+        click.echo(success(
+            f"PASS {app} ({file_hash[:8]}) on {module_config.name} "
+            f"in {duration_s:.2f}s"
+        ))
+        return
+
+    click.echo(error(
+        f"FAIL {app} ({file_hash[:8]}) on {module_config.name} "
+        f"after {duration_s:.2f}s (exit {outcome.record.exit_code})"
+    ))
+    if outcome.record.stdout.strip():
+        click.echo(dim("  stdout:"))
+        for line in outcome.record.stdout.rstrip().splitlines()[-20:]:
+            click.echo(f"    {line}")
+    if outcome.record.stderr.strip():
+        click.echo(dim("  stderr:"))
+        for line in outcome.record.stderr.rstrip().splitlines()[-20:]:
+            click.echo(f"    {line}")
+    # Exit nonzero so CI / `&&` chains break on FAIL.
+    raise SatDeployError(f"validate failed for {app}")
 
 
 @main.command()

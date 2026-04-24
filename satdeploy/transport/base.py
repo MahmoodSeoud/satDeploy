@@ -156,6 +156,41 @@ class Transport(ABC):
         """
         pass
 
+    def exec_command(
+        self,
+        command: str,
+        timeout: Optional[float] = None,
+    ) -> tuple[int, str, str]:
+        """Run a shell command on the target and capture exit code + output.
+
+        Used by `satdeploy validate` to invoke the per-app
+        ``validate_command`` in the target's runtime context. The string is
+        interpreted by the target's default shell — callers are responsible
+        for quoting.
+
+        Default implementation raises NotImplementedError. Concrete
+        transports that can spawn target-side processes (SSH, Local)
+        override this. CSP cannot — Python doesn't speak CSP per the
+        2026-04-17 architectural boundary, and CSP-side validate is on the
+        Phase-1 roadmap inside satdeploy-apm (C).
+
+        Args:
+            command: Shell command string.
+            timeout: Hard wall-clock timeout in seconds, or None for no
+                timeout. On timeout, raises TransportError.
+
+        Returns:
+            (exit_code, stdout, stderr) — exit_code 0 means PASS by
+            convention; nonzero means FAIL.
+
+        Raises:
+            TransportError: If the command cannot be launched, the
+                connection drops mid-run, or the timeout fires.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support exec_command"
+        )
+
     def __enter__(self) -> "Transport":
         """Enter context manager."""
         self.connect()

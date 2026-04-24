@@ -72,26 +72,38 @@ class SSHClient:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.disconnect()
 
-    def run(self, command: str, check: bool = True) -> CommandResult:
+    def run(
+        self,
+        command: str,
+        check: bool = True,
+        timeout: Optional[float] = None,
+    ) -> CommandResult:
         """Run a command on the remote host.
 
         Args:
             command: The command to run.
             check: If True, raise SSHError on non-zero exit code.
+            timeout: Hard wall-clock timeout in seconds, or None for no
+                timeout. Used by `satdeploy validate` to bound runaway
+                test scripts; raises SSHError on timeout.
 
         Returns:
             CommandResult with stdout, stderr, and exit code.
 
         Raises:
-            SSHError: If check=True and command exits with non-zero code.
+            SSHError: If check=True and command exits with non-zero code,
+                or if the command exceeds the timeout.
         """
         if not self._client:
             raise SSHError("Not connected")
 
-        _, stdout, stderr = self._client.exec_command(command)
-        exit_code = stdout.channel.recv_exit_status()
-        stdout_text = stdout.read().decode()
-        stderr_text = stderr.read().decode()
+        try:
+            _, stdout, stderr = self._client.exec_command(command, timeout=timeout)
+            exit_code = stdout.channel.recv_exit_status()
+            stdout_text = stdout.read().decode()
+            stderr_text = stderr.read().decode()
+        except socket.timeout as e:
+            raise SSHError(f"Command timed out after {timeout}s: {command}") from e
 
         result = CommandResult(
             stdout=stdout_text,

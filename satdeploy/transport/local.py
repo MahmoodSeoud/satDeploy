@@ -293,3 +293,31 @@ class LocalTransport(Transport):
         lines: int = 100,
     ) -> Optional[str]:
         return None
+
+    def exec_command(
+        self,
+        command: str,
+        timeout: Optional[float] = None,
+    ) -> tuple[int, str, str]:
+        """Run a shell command on the local machine.
+
+        Used by `satdeploy validate` against the local transport (demo,
+        chroot, mounted rootfs). The shell-interpreted string sees the
+        host's environment — it is the user's responsibility to make the
+        validate_command portable across "real SSH target" and
+        "local-transport stand-in".
+        """
+        import subprocess
+        try:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise TransportError(
+                f"Command timed out after {timeout}s: {command}"
+            ) from e
+        return proc.returncode, proc.stdout, proc.stderr

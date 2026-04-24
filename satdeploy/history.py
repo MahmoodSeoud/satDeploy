@@ -30,6 +30,39 @@ class DeploymentRecord:
     id: Optional[int] = None
 
 
+# Status sentinels for ValidationRecord.status. Strings (not bools) because
+# the spec is "PASS / FAIL record" and the design-doc thesis metric #3 reads
+# the same way ("zero untested binaries reaching flight"). Keeping it as text
+# also leaves room to add a third status (SKIPPED / TIMEOUT) without a schema
+# migration.
+VALIDATION_PASS = "PASS"
+VALIDATION_FAIL = "FAIL"
+
+
+@dataclass
+class ValidationRecord:
+    """A record of a `satdeploy validate` run.
+
+    Keyed by (target, app, file_hash). Lookup `(target, app, file_hash) →
+    PASS exists?` is the only thing the `--requires-validated` flight gate
+    needs to know — but we also keep exit_code, duration, and
+    stdout/stderr so post-mortems can ask "why did flatsat refuse this
+    hash?" weeks after the fact.
+    """
+
+    target: str
+    app: str
+    file_hash: str
+    status: str  # VALIDATION_PASS or VALIDATION_FAIL
+    exit_code: int
+    duration_ms: int
+    command: str
+    stdout: str = ""
+    stderr: str = ""
+    timestamp: Optional[str] = None
+    id: Optional[int] = None
+
+
 class History:
     """Manages deployment history in a SQLite database."""
 
@@ -78,8 +111,39 @@ class History:
                 )
             """)
 
+        self._ensure_validations_table(conn)
+
         conn.commit()
         conn.close()
+
+    def _ensure_validations_table(self, conn: sqlite3.Connection) -> None:
+        """Create the validations table + lookup index if absent.
+
+        Side table (not a column on `deployments`): a hash may be validated
+        independently of any deploy and re-validated multiple times. Keyed by
+        (target, app, file_hash) per the R1 fleet contract — a PASS on som1
+        does NOT satisfy a `push --target flight --requires-validated`.
+        """
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS validations (
+                id INTEGER PRIMARY KEY,
+                target TEXT NOT NULL,
+                app TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                command TEXT NOT NULL,
+                stdout TEXT,
+                stderr TEXT,
+                timestamp TEXT NOT NULL
+            )
+        """)
+        # Lookup index for the gate: (target, app, file_hash, status='PASS').
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_validations_lookup
+            ON validations(target, app, file_hash, status)
+        """)
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         """Migrate existing database to current schema."""
@@ -291,3 +355,112 @@ class History:
             transport=row["transport"] if "transport" in keys else None,
             source=row["source"] if "source" in keys else None,
         )
+
+    # ------------------------------------------------------------------
+    # Validations (side table — see _ensure_validations_table)
+    # ------------------------------------------------------------------
+
+    def record_validation(self, record: ValidationRecord) -> None:
+        """Persist a validation run.
+
+        Multiple PASS rows for the same (target, app, file_hash) are allowed
+        (re-validation after a fix, scheduled re-runs); the gate just checks
+        whether *any* PASS row exists.
+        """
+        timestamp = record.timestamp or datetime.now().isoformat()
+
+        conn = sqlite3.connect(self._db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute(
+            """
+            INSERT INTO validations
+            (target, app, file_hash, status, exit_code, duration_ms,
+             command, stdout, stderr, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.target,
+                record.app,
+                record.file_hash,
+                record.status,
+                record.exit_code,
+                record.duration_ms,
+                record.command,
+                record.stdout,
+                record.stderr,
+                timestamp,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def has_pass_record(self, *, target: str, app: str, file_hash: str) -> bool:
+        """Return True iff at least one PASS validation exists for this triple.
+
+        This is the predicate the `push --requires-validated` flight gate
+        consults. Keyed by all three of (target, app, file_hash) — a hash
+        validated on som1 does NOT satisfy the gate on flight (R1 fleet
+        contract: target_name is part of the validation key).
+        """
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.execute(
+            """
+            SELECT 1 FROM validations
+            WHERE target = ? AND app = ? AND file_hash = ? AND status = ?
+            LIMIT 1
+            """,
+            (target, app, file_hash, VALIDATION_PASS),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row is not None
+
+    def get_validation_history(
+        self,
+        *,
+        app: str,
+        target: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> list[ValidationRecord]:
+        """Return validation records for an app (optionally scoped to one target).
+
+        Newest first. Used by `satdeploy validate` for human-readable output
+        and (eventually) by the dashboard to surface validation provenance.
+        """
+        conn = sqlite3.connect(self._db_path)
+        conn.row_factory = sqlite3.Row
+
+        if target is None:
+            query = "SELECT * FROM validations WHERE app = ? ORDER BY timestamp DESC"
+            params: tuple = (app,)
+        else:
+            query = (
+                "SELECT * FROM validations WHERE app = ? AND target = ? "
+                "ORDER BY timestamp DESC"
+            )
+            params = (app, target)
+
+        if limit:
+            query += f" LIMIT {limit}"
+
+        cursor = conn.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [
+            ValidationRecord(
+                id=row["id"],
+                target=row["target"],
+                app=row["app"],
+                file_hash=row["file_hash"],
+                status=row["status"],
+                exit_code=row["exit_code"],
+                duration_ms=row["duration_ms"],
+                command=row["command"],
+                stdout=row["stdout"] or "",
+                stderr=row["stderr"] or "",
+                timestamp=row["timestamp"],
+            )
+            for row in rows
+        ]

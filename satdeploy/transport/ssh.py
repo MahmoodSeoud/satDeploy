@@ -359,3 +359,17 @@ class SSHTransport(Transport):
             check=False,
         )
         return result.stdout
+
+    def exec_command(
+        self,
+        command: str,
+        timeout: Optional[float] = None,
+    ) -> tuple[int, str, str]:
+        """Run a shell command on the target via SSH (no TTY)."""
+        if not self._ssh:
+            raise TransportError("Not connected")
+        try:
+            result = self._ssh.run(command, check=False, timeout=timeout)
+        except SSHError as e:
+            raise TransportError(str(e)) from e
+        return result.exit_code, result.stdout, result.stderr
