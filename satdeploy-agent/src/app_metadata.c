@@ -31,7 +31,7 @@
 typedef struct {
     char app_name[MAX_APP_NAME_LEN];
     char remote_path[MAX_PATH_LEN];
-    char file_hash[16];
+    char file_hash[HASH_BUF_LEN];
     char deployed_at[32];
 } app_entry_t;
 

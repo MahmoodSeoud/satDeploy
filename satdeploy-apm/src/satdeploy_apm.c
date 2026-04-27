@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 
 #include "sha256.h"
+#include "history.h"
 
 #include <slash/slash.h>
 #include <slash/optparse.h>
@@ -130,7 +131,7 @@ static int get_file_size(const char *path, uint32_t *size_out)
 
 static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
 {
-    if (hash_size < 9) {
+    if (hash_size < HISTORY_MAX_HASH) {
         return -1;
     }
 
@@ -139,7 +140,7 @@ static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
         return -1;
     }
 
-    /* SHA256 hash - first 8 hex chars, matches agent and ground station */
+    /* Full SHA256 hex (64 chars + NUL); matches agent's compute_file_checksum. */
     sha256_ctx ctx;
     sha256_init(&ctx);
 
@@ -153,8 +154,10 @@ static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
     unsigned char digest[32];
     sha256_final(&ctx, digest);
 
-    snprintf(hash_out, hash_size, "%02x%02x%02x%02x",
-             digest[0], digest[1], digest[2], digest[3]);
+    for (int i = 0; i < 32; i++) {
+        snprintf(hash_out + (i * 2), 3, "%02x", digest[i]);
+    }
+    hash_out[64] = '\0';
     return 0;
 }
 
@@ -310,8 +313,26 @@ static void *dtp_server_thread(void *arg) {
     return NULL;
 }
 
-/* Payload ID counter */
-static uint8_t next_payload_id = 1;
+/* Compute deterministic payload_id from app_name via FNV-1a 8-bit fold.
+ *
+ * payload_id is uint8_t (256 values) so collisions are possible across many
+ * apps, but cross-pass resume requires the same app to map to the same id
+ * across APM invocations. Collisions are caught by the agent's SHA256 verify
+ * on the resume sidecar — different content under the same payload_id is
+ * rejected, not silently corrupted.
+ *
+ * Avoid 0 because the agent treats 0 as "not set" in some places. */
+static uint8_t payload_id_for_app(const char *app_name)
+{
+    uint32_t h = 2166136261u;  /* FNV offset basis */
+    for (const char *p = app_name; *p; p++) {
+        h ^= (uint8_t)*p;
+        h *= 16777619u;
+    }
+    /* Fold 32 -> 8 with XOR, then ensure non-zero. */
+    uint8_t id = (uint8_t)((h >> 24) ^ (h >> 16) ^ (h >> 8) ^ h);
+    return id == 0 ? 1 : id;
+}
 
 /**
  * Deploy a single app to the target node.
@@ -366,7 +387,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
 
     /* Auto-compute size and checksum from local file */
     uint32_t file_size = 0;
-    char checksum[16] = {0};
+    char checksum[HISTORY_MAX_HASH] = {0};
 
     if (get_file_size(local_path, &file_size) < 0) {
         printf("Error: Cannot read file '%s'\n", local_path);
@@ -412,8 +433,15 @@ static int deploy_single_app(unsigned int node, char *app_name,
     printf("  Checksum: %s\n", checksum);
     printf("  Target:   node %u\n", node);
 
-    /* Step 1: Register the file as a DTP payload */
-    uint8_t payload_id = next_payload_id++;
+    /* Step 1: Register the file as a DTP payload.
+     *
+     * payload_id is deterministic per app_name so cross-pass resume works:
+     * agent's stored session_id + sidecar refer to a payload_id that this
+     * APM will re-register with the same bytes on the next push. If a prior
+     * registration is still around (e.g., interrupted previous push in the
+     * same csh session), del-then-add ensures last-writer-wins semantics. */
+    uint8_t payload_id = payload_id_for_app(app_name);
+    dtp_file_payload_del(payload_id);  /* idempotent; clears stale registration */
     printf("[dtp] Registering payload id=%u file=%s\n", payload_id, local_path);
     fflush(stdout);
     if (!dtp_file_payload_add(payload_id, local_path)) {
@@ -754,7 +782,7 @@ static int satdeploy_rollback_cmd(struct slash *slash)
 
     /* Show which backup was restored */
     char success_msg[256];
-    char restored_hash[16] = {0};
+    char restored_hash[HISTORY_MAX_HASH] = {0};
     if (resp->backup_path && strlen(resp->backup_path) > 0) {
         /* Extract hash from backup path - new format: <hash>.bak */
         const char *filename = strrchr(resp->backup_path, '/');
@@ -762,13 +790,13 @@ static int satdeploy_rollback_cmd(struct slash *slash)
 
         size_t len = strlen(filename);
         if (len > 4 && strcmp(filename + len - 4, ".bak") == 0) {
-            /* Backup format: YYYYMMDD-HHMMSS-{hash8}.bak
-             * Extract hash from after the last '-' */
+            /* Backup format: YYYYMMDD-HHMMSS-{hash}.bak with full SHA256
+             * (or legacy {hash8}.bak). Extract hash after the last '-'. */
             const char *last_dash = strrchr(filename, '-');
             if (last_dash) {
                 last_dash++;  /* skip the '-' */
                 size_t hash_len = (filename + len - 4) - last_dash;
-                if (hash_len > 0 && hash_len <= 8) {
+                if (hash_len > 0 && hash_len < HISTORY_MAX_HASH) {
                     strncpy(restored_hash, last_dash, hash_len);
                     restored_hash[hash_len] = '\0';
                 }
@@ -776,7 +804,8 @@ static int satdeploy_rollback_cmd(struct slash *slash)
         }
 
         if (restored_hash[0]) {
-            snprintf(success_msg, sizeof(success_msg), "Rolled back %s to %s",
+            /* Display first 8 chars (git short-hash) for readability. */
+            snprintf(success_msg, sizeof(success_msg), "Rolled back %s to %.8s",
                      app_name, restored_hash);
         } else {
             snprintf(success_msg, sizeof(success_msg), "Rolled back %s", app_name);

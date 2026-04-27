@@ -1,8 +1,25 @@
 /**
- * DTP client wrapper - Downloads files via DTP protocol
+ * DTP client wrapper - downloads files via DTP protocol with cross-pass resume.
  *
- * Uses the lower-level DTP API (prepare + hooks + start) instead of
- * dtp_client_main to ensure hooks are set before the transfer begins.
+ * Flow per call:
+ *   1. Compute deterministic session_id from (app_name, expected_checksum) so
+ *      ground and agent agree without negotiation.
+ *   2. Open temp file "r+b" if a sidecar state exists, else "wb".
+ *   3. dtp_prepare_session(resume=false) sets fresh defaults; we drive resume
+ *      manually via dtp_deserialize_session() after hooks are wired (libdtp's
+ *      built-in resume path inside prepare runs before hooks can be set).
+ *   4. dtp_set_opt(DTP_SESSION_HOOKS_CFG) attaches our serialize/deserialize
+ *      callbacks; on_deserialize validates the on-disk hash matches what we
+ *      expect, refusing resume if a ground rebuild changed the bytes.
+ *   5. dtp_start_transfer drives the actual receive loop. on_data_packet
+ *      writes packets at info.data_offset directly into the temp file.
+ *   6. On DTP_OK: full transfer, unlink the sidecar (no resume needed).
+ *      On DTP_CANCELLED with bytes < payload: pass ended mid-flight,
+ *      dtp_serialize_session() persists state for the next pass.
+ *
+ * On-disk artifacts:
+ *   <dest_path>.tmp                     partial bytes
+ *   /var/lib/satdeploy/state/<app>.dtpstate   session state (intervals, hash)
  */
 
 #include <stdio.h>
@@ -10,6 +27,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #include <csp/csp.h>
 #include <dtp/dtp.h>
@@ -17,6 +36,7 @@
 #include <dtp/dtp_protocol.h>
 
 #include "satdeploy_agent.h"
+#include "session_state.h"
 
 /* DTP configuration defaults */
 #define DTP_DEFAULT_TIMEOUT_S    60
@@ -26,7 +46,7 @@
 /* Context for file download */
 typedef struct {
     FILE *fp;
-    uint32_t bytes_written;
+    uint32_t bytes_written;     /* bytes this process wrote, not total */
     uint32_t expected_size;
     int error;
 } download_ctx_t;
@@ -44,7 +64,8 @@ static void on_download_start(dtp_t *session) {
 
 /**
  * DTP on_data_packet callback - called for each received data packet.
- * Writes data to file.
+ * Writes data to file at the offset libdtp reports, so out-of-order arrivals
+ * and resume-from-mid-stream both land in the right bytes.
  */
 static bool on_download_data(dtp_t *session, csp_packet_t *packet) {
     download_ctx_t *ctx = (download_ctx_t *)dtp_session_get_user_ctx(session);
@@ -81,29 +102,19 @@ static bool on_download_data(dtp_t *session, csp_packet_t *packet) {
     return true;  /* Continue transfer */
 }
 
-/**
- * DTP on_end callback - called when transfer completes or fails.
- */
 static void on_download_end(dtp_t *session) {
-    download_ctx_t *ctx = (download_ctx_t *)dtp_session_get_user_ctx(session);
-    if (ctx) {
-        /* logged in dtp_download_file after cleanup */
-        (void)ctx;
-    }
+    (void)session;
 }
 
-/**
- * DTP on_release callback - called when session is released.
- */
 static void on_download_release(dtp_t *session) {
     (void)session;
-    /* Nothing to clean up - context is on stack */
 }
 
 int dtp_download_file(uint32_t server_node, uint8_t payload_id,
                       const char *dest_path, uint32_t expected_size,
+                      const char *app_name, const char *expected_checksum,
                       uint16_t mtu, uint32_t throughput, uint8_t timeout) {
-    if (dest_path == NULL) {
+    if (dest_path == NULL || app_name == NULL || expected_checksum == NULL) {
         return -1;
     }
 
@@ -112,10 +123,35 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
     if (throughput == 0) throughput = DTP_DEFAULT_THROUGHPUT;
     if (timeout == 0)    timeout = DTP_DEFAULT_TIMEOUT_S;
 
-    /* Open destination file */
-    FILE *fp = fopen(dest_path, "wb");
+    /* Resolve sidecar state path. Failure here is non-fatal: we just lose
+     * resume capability for this app and degrade to fresh-every-time. */
+    session_state_ctx_t state_ctx;
+    memset(&state_ctx, 0, sizeof(state_ctx));
+    int has_state_path = (session_state_path(app_name, state_ctx.path,
+                                             sizeof(state_ctx.path)) == 0);
+    if (has_state_path) {
+        strncpy(state_ctx.expected_hash, expected_checksum,
+                sizeof(state_ctx.expected_hash) - 1);
+        (void)session_state_dir_ensure();  /* best-effort */
+    }
+    int state_file_present = has_state_path && session_state_exists(state_ctx.path);
+
+    /* Open destination file. "r+b" preserves any partial bytes from a prior
+     * pass; "wb" truncates. We can only safely open r+b if BOTH the temp file
+     * and a state file exist — otherwise we have bytes with no idea where the
+     * gaps are. */
+    int temp_file_present = 0;
+    {
+        struct stat st;
+        if (stat(dest_path, &st) == 0 && S_ISREG(st.st_mode)) {
+            temp_file_present = 1;
+        }
+    }
+    const char *open_mode = (state_file_present && temp_file_present) ? "r+b" : "wb";
+    FILE *fp = fopen(dest_path, open_mode);
     if (fp == NULL) {
-        printf("\033[31m[dtp]    error: failed to open %s\033[0m\n", dest_path);
+        printf("\033[31m[dtp]    error: failed to open %s (mode=%s)\033[0m\n",
+               dest_path, open_mode);
         return -1;
     }
 
@@ -127,22 +163,23 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         .error = 0
     };
 
-    /* Use lower-level API: prepare session, set hooks, then start transfer.
-       This ensures hooks are active during the transfer (unlike dtp_client_main
-       which calls dtp_start_transfer before hooks can be set). */
-    /* Generate unique session_id from time + counter to avoid stale packet confusion */
-    static uint32_t session_counter = 0;
-    uint32_t session_id = (uint32_t)time(NULL) ^ (++session_counter << 16);
+    /* Deterministic session_id: same content always resumes on the same id,
+     * so ground and agent don't need to renegotiate after a reboot. */
+    uint32_t session_id = session_state_compute_id(app_name, expected_checksum);
 
+    /* Use lower-level API: prepare(resume=false) sets fresh defaults; we then
+     * set hooks and explicitly call dtp_deserialize_session() to overwrite
+     * with on-disk state. This ordering is required because hooks must be
+     * attached BEFORE deserialize runs. */
     dtp_t *session = dtp_prepare_session(
         server_node,
         session_id,
         throughput,
         timeout,
         payload_id,
-        NULL,              /* ctx - set below */
+        NULL,              /* user ctx — set below */
         mtu,
-        false,             /* resume */
+        false,             /* resume — driven manually below */
         0                  /* keep_alive_interval */
     );
 
@@ -152,22 +189,7 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         return -1;
     }
 
-    /* Debug: dump raw request_meta bytes */
-    {
-        printf("[dtp-debug] sizeof(dtp_meta_req_t)=%zu\n", sizeof(dtp_meta_req_t));
-        uint8_t *raw = (uint8_t *)&session->request_meta;
-        printf("[dtp-debug] request_meta raw:");
-        for (int i = 0; i < 16; i++) printf(" %02x", raw[i]);
-        printf("\n");
-        printf("[dtp-debug] throughput=%u nof_intervals=%u payload_id=%u mtu=%u\n",
-               session->request_meta.throughput,
-               session->request_meta.nof_intervals,
-               session->request_meta.payload_id,
-               session->request_meta.mtu);
-        fflush(stdout);
-    }
-
-    /* Set user context and hooks BEFORE starting the transfer */
+    /* Set user context and hooks BEFORE start (and before manual deserialize). */
     dtp_session_set_user_ctx(session, &ctx);
 
     dtp_params hooks = {
@@ -176,15 +198,37 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
             .on_data_packet = on_download_data,
             .on_end = on_download_end,
             .on_release = on_download_release,
-            .hook_ctx = &ctx
+            .on_serialize = session_state_on_serialize,
+            .on_deserialize = session_state_on_deserialize,
+            .hook_ctx = &state_ctx
         }
     };
     dtp_set_opt(session, DTP_SESSION_HOOKS_CFG, &hooks);
 
-    /* Now start the transfer — hooks are active */
+    /* If a sidecar state file exists, restore session state from it. The
+     * deserialize hook validates format/version/hash and unlinks the file on
+     * any mismatch (caller's "r+b" then writes from byte 0 normally). */
+    if (state_file_present) {
+        dtp_deserialize_session(session, &state_ctx);
+        if (state_ctx.resumed) {
+            printf("[dtp]    resuming %s from %u bytes\n", app_name,
+                   session->bytes_received);
+        }
+    }
+
+    /* Now start the transfer — hooks are active, state is restored if any. */
     int result = dtp_start_transfer(session);
 
-    /* Cleanup */
+    /* On a partial/cancelled transfer where we have not yet received the full
+     * payload, persist state so the next pass can resume. The serialize hook
+     * is called via libdtp; we just trigger it. */
+    bool partial = (result == DTP_CANCELLED &&
+                    expected_size > 0 &&
+                    session->bytes_received < session->payload_size);
+    if (partial && has_state_path) {
+        dtp_serialize_session(session, &state_ctx);
+    }
+
     dtp_release_session(session);
     fclose(fp);
 
@@ -195,16 +239,11 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
     /* Accept DTP_CANCELLED when all bytes were written — the DTP library
        may report cancelled if bytes_received tracking diverges from
        payload_size, even when the actual file data was fully written. */
-    if (result != DTP_OK && result != DTP_CANCELLED) {
-        printf("\033[31m[dtp]    error: download failed (status=%d)\033[0m\n", result);
-        return -1;
-    }
     if (result == DTP_CANCELLED && expected_size > 0 && ctx.bytes_written == expected_size) {
-        /* transfer cancelled but byte count matches — proceed to checksum */
-        (void)0;
+        /* full set written this pass — proceed to checksum */
     } else if (result != DTP_OK) {
-        printf("\033[31m[dtp]    error: incomplete (%u/%u bytes)\033[0m\n",
-               ctx.bytes_written, expected_size);
+        printf("\033[31m[dtp]    error: incomplete (%u/%u bytes, status=%d)\033[0m\n",
+               ctx.bytes_written, expected_size, result);
         return -1;
     }
 
@@ -213,6 +252,12 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         printf("\033[33m[dtp]    warning: expected %u bytes, got %u\033[0m\n",
                expected_size, ctx.bytes_written);
         return -1;
+    }
+
+    /* Full transfer complete — drop the resume sidecar so next deploy of a
+     * different binary doesn't try to fast-forward against stale state. */
+    if (has_state_path) {
+        session_state_unlink(state_ctx.path);
     }
 
     printf("[dtp]    complete (%u bytes)\n", ctx.bytes_written);

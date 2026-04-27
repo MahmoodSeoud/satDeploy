@@ -9,7 +9,8 @@
 #ifndef SATDEPLOY_HISTORY_H
 #define SATDEPLOY_HISTORY_H
 
-#define HISTORY_MAX_HASH 16
+/* SHA256 hex (64 chars) + NUL. Shared by all hash-bearing buffers in APM. */
+#define HISTORY_MAX_HASH 65
 #define HISTORY_MAX_PROV 128
 #define HISTORY_MAX_PATH 256
 #define HISTORY_MAX_MSG  512
@@ -28,7 +29,7 @@ typedef struct {
 typedef struct {
     const char *module;           /* target name from config, or "default" */
     const char *app;              /* app name */
-    const char *file_hash;        /* SHA256 of deployed file (first 8 chars) */
+    const char *file_hash;        /* SHA256 of deployed file (full 64 hex chars) */
     const char *remote_path;      /* install path on target */
     const char *action;           /* "push" or "rollback" */
     int         success;          /* 1 for success, 0 for failure */

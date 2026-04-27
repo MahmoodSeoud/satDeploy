@@ -23,8 +23,9 @@
 /* Maximum app name length */
 #define MAX_APP_NAME_LEN 64
 
-/* Hash length (8 hex chars) */
-#define HASH_LEN 8
+/* SHA256 hex representation: 64 hex chars + NUL terminator. */
+#define HASH_HEX_LEN 64
+#define HASH_BUF_LEN 65
 
 /* Global running flag (set to 0 to trigger shutdown) */
 extern volatile int running;
@@ -68,11 +69,11 @@ int copy_file(const char *src, const char *dst);
 /**
  * Compute SHA256 checksum of a file.
  *
- * Returns first 8 hex chars of SHA256 digest.
+ * Writes the full 64-hex-char SHA256 digest, NUL-terminated.
  *
  * @param path Path to the file.
- * @param hash_out Buffer to store 8-char hex digest.
- * @param hash_size Size of hash_out buffer (must be >= 9).
+ * @param hash_out Buffer to store hex digest.
+ * @param hash_size Size of hash_out buffer (must be >= HASH_BUF_LEN).
  * @return 0 on success, -1 on failure.
  */
 int compute_file_checksum(const char *path, char *hash_out, size_t hash_size);
@@ -112,19 +113,29 @@ typedef void (*backup_list_callback)(const char *version, const char *timestamp,
 int backup_list(const char *app_name, backup_list_callback callback, void *user_data);
 
 /**
- * Download a file via DTP protocol.
+ * Download a file via DTP protocol with cross-pass resume support.
  *
- * @param server_node DTP server CSP node address.
- * @param payload_id DTP payload identifier.
- * @param dest_path Local path to save the downloaded file.
- * @param expected_size Expected file size (0 to skip size check).
- * @param mtu Max transmission unit (0 = use default 1024).
- * @param throughput Target throughput in bytes/s (0 = use default 10 MB/s).
- * @param timeout Transfer timeout in seconds (0 = use default 60, max 255).
- * @return 0 on success, -1 on failure.
+ * If a session-state sidecar exists for app_name (see session_state.h) AND
+ * the dest_path temp file exists, the function resumes from the stored byte
+ * offset; otherwise it starts fresh. On partial completion (pass ends mid-
+ * transfer) the sidecar is updated so the next call resumes correctly.
+ * On full completion the sidecar is removed.
+ *
+ * @param server_node     DTP server CSP node address.
+ * @param payload_id      DTP payload identifier.
+ * @param dest_path       Local path to save the downloaded file.
+ * @param expected_size   Expected file size (0 to skip size check).
+ * @param app_name        App name; used for state path + session_id derivation.
+ * @param expected_checksum  Full SHA256 hex of the payload; gates resume
+ *                           against ground rebuilds and seeds session_id.
+ * @param mtu             Max transmission unit (0 = use default 1024).
+ * @param throughput      Target throughput in bytes/s (0 = use default).
+ * @param timeout         Transfer timeout in seconds (0 = use default 60).
+ * @return 0 on full success, -1 on failure (partial = sidecar persists, retry).
  */
 int dtp_download_file(uint32_t server_node, uint8_t payload_id,
                       const char *dest_path, uint32_t expected_size,
+                      const char *app_name, const char *expected_checksum,
                       uint16_t mtu, uint32_t throughput, uint8_t timeout);
 
 /**

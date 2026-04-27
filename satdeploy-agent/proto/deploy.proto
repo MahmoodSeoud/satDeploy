@@ -39,7 +39,7 @@ message DeployRequest {
     uint32 dtp_server_port = 8;  // DTP server port (typically 7)
     uint32 payload_id = 9;       // DTP payload identifier
     uint32 expected_size = 10;   // Expected file size in bytes
-    string expected_checksum = 11; // Expected SHA256 checksum (first 8 chars)
+    string expected_checksum = 11; // Expected SHA256 checksum (full 64 hex chars)
 
     // For rollback command
     string rollback_hash = 12;  // Specific backup hash to restore (optional)

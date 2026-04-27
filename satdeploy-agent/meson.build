@@ -28,6 +28,7 @@ sources = files(
 	'src/backup_manager.c',
 	'src/app_metadata.c',
 	'src/dtp_client.c',
+	'src/session_state.c',
 	'proto/deploy.pb-c.c',
 )
 
