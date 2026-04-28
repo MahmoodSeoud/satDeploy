@@ -334,14 +334,62 @@ static void *dtp_server_thread(void *arg) {
     return NULL;
 }
 
+/* Server lifecycle bundle. Lets the caller decide how long the DTP server
+ * lives — solo push spawns one per call (current behaviour), push -a keeps
+ * a single instance up across every app in the loop.
+ *
+ * Why this matters: libdtp's dtp_server_run uses a `static csp_socket_t`
+ * and unconditionally re-binds it to CSP port 7 on every entry. Within one
+ * process, a second/third spawn does an unchecked re-bind on the still-
+ * bound socket — csp_listen quietly reinitialises the rx_queue, the prior
+ * thread's queue gets orphaned, and CSP buffer state diverges from what
+ * the libdtp internals expect. Sequential satdeploy push commands escape
+ * this because csh dispatches each one fresh; push -a does not, because
+ * the entire loop runs inside one slash command and the spawn-and-die
+ * pattern fires N times in tight succession. */
+typedef struct {
+    dtp_server_ctx_t ctx;
+    pthread_t thread;
+    bool active;
+} dtp_server_session_t;
+
+static int dtp_server_session_start(dtp_server_session_t *s) {
+    s->ctx.exit_flag = false;
+    s->ctx.ready = false;
+    s->active = false;
+    if (pthread_create(&s->thread, NULL, dtp_server_thread, &s->ctx) != 0) {
+        return -1;
+    }
+    /* Wait for the server thread to enter dtp_server_main */
+    for (int i = 0; i < 50 && !s->ctx.ready; i++) {
+        usleep(20000);
+    }
+    /* Give dtp_server_main time to bind port 7 before the agent connects */
+    usleep(200000);
+    s->active = true;
+    return 0;
+}
+
+static void dtp_server_session_stop(dtp_server_session_t *s) {
+    if (!s->active) return;
+    s->ctx.exit_flag = true;
+    pthread_join(s->thread, NULL);
+    s->active = false;
+}
+
 
 /**
  * Deploy a single app to the target node.
  * Used by both single-app push and --all.
+ *
+ * external_server: if non-NULL, callers are managing the DTP server lifecycle
+ * (this is the push -a path keeping one server alive across the whole loop).
+ * If NULL we spawn and reap a private server inside this call (solo push).
  */
 static int deploy_single_app(unsigned int node, char *app_name,
                               const char *local_override, const char *remote_override,
-                              int force, satdeploy_config_t *config)
+                              int force, satdeploy_config_t *config,
+                              dtp_server_session_t *external_server)
 {
     const char *local_path = local_override;
     const char *remote_path = remote_override;
@@ -466,21 +514,18 @@ static int deploy_single_app(unsigned int node, char *app_name,
         return SLASH_EIO;
     }
 
-    /* Step 2: Start DTP server in background thread */
-    dtp_server_ctx_t dtp_ctx = { .exit_flag = false, .ready = false };
-    pthread_t dtp_thread;
-    if (pthread_create(&dtp_thread, NULL, dtp_server_thread, &dtp_ctx) != 0) {
-        printf("Error: Failed to start DTP server thread\n");
-        dtp_file_payload_del(payload_id);
-        return SLASH_EIO;
+    /* Step 2: Make sure a DTP server is running. push -a hands us one, in
+     * which case we leave it alone — the per-iteration spawn/join cycle is
+     * what causes the loop in --all (see dtp_server_session_t comment). */
+    dtp_server_session_t local_server = {0};
+    bool owns_server = (external_server == NULL);
+    if (owns_server) {
+        if (dtp_server_session_start(&local_server) != 0) {
+            printf("Error: Failed to start DTP server thread\n");
+            dtp_file_payload_del(payload_id);
+            return SLASH_EIO;
+        }
     }
-
-    /* Wait for server thread to start */
-    for (int i = 0; i < 50 && !dtp_ctx.ready; i++) {
-        usleep(20000);
-    }
-    /* Give dtp_server_main time to bind port 7 */
-    usleep(200000);
 
     /* Step 3: Send CMD_DEPLOY — agent will pull the file via DTP */
     csp_iface_t *default_iface = csp_iflist_get_by_isdfl(NULL);
@@ -508,9 +553,12 @@ static int deploy_single_app(unsigned int node, char *app_name,
     Satdeploy__DeployResponse *resp = NULL;
     int rc = send_deploy_request(node, &deploy_req, &resp);
 
-    /* Step 4: Stop DTP server and clean up */
-    dtp_ctx.exit_flag = true;
-    pthread_join(dtp_thread, NULL);
+    /* Step 4: Tear down our private server (if we spawned one), drop the
+     * payload registration either way. Persistent-server callers keep their
+     * server alive for the next iteration. */
+    if (owns_server) {
+        dtp_server_session_stop(&local_server);
+    }
     dtp_file_payload_del(payload_id);
 
     if (rc < 0) {
@@ -640,12 +688,26 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         if (node == 0)
             node = slash_dfl_node;
 
+        /* Spawn the DTP server once for the whole loop. The per-iteration
+         * spawn-and-die pattern hits libdtp's static-socket re-bind issue
+         * after a couple of apps and stalls the transfer; one persistent
+         * server avoids the entire problem class. */
+        dtp_server_session_t shared_server = {0};
+        if (dtp_server_session_start(&shared_server) != 0) {
+            printf("Error: Failed to start DTP server thread\n");
+            return SLASH_EIO;
+        }
+
         int failed = 0;
         for (int i = 0; i < all_config->num_apps; i++) {
             int rc = deploy_single_app(node, all_config->apps[i].name,
-                                       NULL, NULL, force, all_config);
+                                       NULL, NULL, force, all_config,
+                                       &shared_server);
             if (rc != SLASH_SUCCESS) failed++;
         }
+
+        dtp_server_session_stop(&shared_server);
+
         if (failed > 0) {
             printf("\n%d of %d deployments failed\n", failed, all_config->num_apps);
             return SLASH_EIO;
@@ -694,7 +756,7 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         node = slash_dfl_node;
     }
 
-    return deploy_single_app(node, app_name, local_path, remote_path, force, config);
+    return deploy_single_app(node, app_name, local_path, remote_path, force, config, NULL);
 }
 
 static int satdeploy_rollback_cmd(struct slash *slash)
