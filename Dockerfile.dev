@@ -121,8 +121,10 @@ PRF
 RUN echo 'for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done' \
         >>/etc/bash.bashrc
 
-# Welcome banner runs once per shell
+# Welcome banner runs once per top-level entry. $TMUX is set inside tmux
+# panes — skipping the MOTD there avoids printing it in every new pane.
 RUN cat >/etc/profile.d/satdeploy-motd.sh <<'MOTD'
+[ -n "$TMUX" ] && return 0
 cat <<EOF
 ─────────────────────────────────────────────────────
  satdeploy dev container
@@ -151,15 +153,26 @@ cat <<EOF
 EOF
 MOTD
 
-# Reasonable tmux defaults: more scrollback + mouse on.
+# Tmux config: scrollback, mouse, and pane-split bindings the user asked for.
+#   prefix v  → vertical-line split (panes side-by-side, split-window -h)
+#   prefix s  → horizontal-line split (panes stacked,    split-window -v)
+# `unbind s` first because it normally maps to choose-tree (session list).
 RUN cat >/root/.tmux.conf <<'TCONF'
 set -g history-limit 50000
 set -g mouse on
 set -g default-terminal "screen-256color"
 set -g status-bg colour235
 set -g status-fg colour250
+
+unbind s
+bind v split-window -hc "#{pane_current_path}"
+bind s split-window -vc "#{pane_current_path}"
 TCONF
 
 WORKDIR /satdeploy
 
-CMD ["/bin/bash", "-l"]
+# Auto-launch tmux on container entry. -A attaches to an existing session
+# named 'satdeploy' if one exists, otherwise creates it. Wrapped in
+# `bash -lc 'exec ...'` so /etc/profile.d helpers load before tmux spawns
+# its own shells (each pane shell will also pick up /etc/bash.bashrc).
+CMD ["bash", "-lc", "exec tmux new-session -A -s satdeploy"]

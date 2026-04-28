@@ -46,5 +46,7 @@ build-all() { build-agent && build-apm; }
 # Backward-compat: install-apm is now identical to build-apm.
 install-apm() { build-apm; }
 
-# Convenience launchers
-csh-zmq() { csh -i /satdeploy/init/zmq.csh "$@"; }
+# Override csh so plain `csh` always boots through the project's ZMQ init
+# script (csp init + zmq + apm load). `command csh` calls the binary
+# directly, bypassing this function — no recursion.
+csh() { command csh -i /satdeploy/init/zmq.csh "$@"; }
