@@ -4,15 +4,21 @@ Guidance for Claude Code when working with this repository.
 
 ## Project Overview
 
-**satdeploy** is a deployment system for embedded Linux targets (satellites) with versioned backups, dependency-aware service management, and one-command rollback. It supports both SSH and CSP (Cubesat Space Protocol) transports.
+**satdeploy** is a deployment system for embedded Linux targets (satellites)
+with versioned backups, dependency-aware service management, one-command
+rollback, and **cross-pass resumable transfers** over CSP/DTP — a partial
+upload survives operator Ctrl-C, agent reboot, and pass-window boundaries.
 
 ### Components
 
 | Component | Language | Purpose |
 |-----------|----------|---------|
-| **satdeploy** | Python | Ground station CLI - orchestrates deployments |
-| **satdeploy-agent** | C | Runs on ARM target - handles CSP deploy commands |
-| **satdeploy-apm** | C | csh slash commands for ground station |
+| **satdeploy-agent** | C | Runs on ARM target — handles CSP deploy commands |
+| **satdeploy-apm** | C | csh slash commands for the ground station |
+
+CSP-only since `phase0-week1`. The Python CLI was deleted to focus the project
+on the application-level OTA story for CSP missions; it can be reintroduced
+later if SSH transport is needed.
 
 ## Build Commands
 
@@ -28,7 +34,7 @@ ninja -C build-arm
 # Output: build-arm/satdeploy-agent
 ```
 
-The `build/` directory is for x86 native testing only - never deploy it.
+The `build/` directory is for x86 native testing only — never deploy it.
 
 ### satdeploy-apm (Ground station)
 
@@ -46,38 +52,7 @@ ninja -C build
 # Install: cp build/libcsh_satdeploy_apm.so /root/.local/lib/csh/
 ```
 
-### Python CLI
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-python -m pytest
-```
-
 ## Architecture
-
-### Transport Boundary
-
-Each transport is handled by a dedicated tool:
-
-- **SSH** - Python CLI (`satdeploy`). Traditional SSH/SFTP for direct network access.
-- **CSP** - C APM (`satdeploy-apm`). Cubesat Space Protocol via CSH slash commands.
-
-Both tools write to the same `~/.satdeploy/history.db` (SQLite, WAL mode) so `satdeploy status` shows a unified view across transports.
-
-### Python Modules
-
-| Module | Purpose |
-|--------|---------|
-| `cli.py` | Click command handlers, main orchestration |
-| `config.py` | YAML config loading, per-target flat format |
-| `transport/base.py` | Abstract transport interface |
-| `transport/ssh.py` | SSH/SFTP implementation |
-| `deployer.py` | Backup creation, file upload, hash verification |
-| `services.py` | systemd service management |
-| `dependencies.py` | Topological sort for service ordering |
-| `history.py` | SQLite deployment tracking (shared with APM) |
-| `output.py` | CLI formatting (colors, symbols, steps) |
 
 ### satdeploy-agent (C)
 
@@ -86,56 +61,70 @@ Runs on target, listens on CSP port 20 for protobuf commands:
 | Command | Action |
 |---------|--------|
 | `STATUS` | Return app statuses with hashes |
-| `DEPLOY` | Stop app, backup, download via DTP, install, start |
+| `DEPLOY` | Stop app, backup, download via DTP (cross-pass resumable), install, start |
 | `ROLLBACK` | Restore from backup directory |
 | `LIST_VERSIONS` | List available backups |
 | `VERIFY` | Return SHA256 of installed file |
 
 **Interfaces:** ZMQ (default), CAN, KISS serial
 
-**Dependencies:** libcsp, libparam, DTP, protobuf-c
+**Dependencies:** libcsp, libparam, DTP, protobuf-c, OpenSSL
 
 ### satdeploy-apm Slash Commands
 
 Ground station csh module providing:
-- `satdeploy status` - Show status of deployed apps and services
-- `satdeploy push <app>` - Deploy one or more apps to a target
-- `satdeploy rollback <app>` - Rollback to a previous version
-- `satdeploy list <app>` - List all versions of an app (deployed + backups)
-- `satdeploy logs <app>` - Show logs for an app's service
+- `satdeploy status` — Show status of deployed apps and services
+- `satdeploy push <app>` — Deploy one or more apps to a target
+- `satdeploy rollback <app>` — Rollback to a previous version
+- `satdeploy list <app>` — List all versions of an app (deployed + backups)
+- `satdeploy logs <app>` — Show logs for an app's service
+
+### Cross-pass DTP resume
+
+Within-pass reliability is the libdtp selective-repeat retry loop in
+`satdeploy-agent/src/dtp_client.c` (commit 5fbe1b1) — bitmap of received
+seqs, scan for gaps, re-issue the request with `request_meta.intervals[]`,
+up to 8 retry rounds.
+
+Cross-pass persistence wraps that loop. The receive bitmap is written to
+`/var/lib/satdeploy/state/<app>.dtpstate` atomically when a pass exhausts
+its retry budget without full coverage; the next deploy for the same
+`(app, expected_hash)` pre-patches `request_meta.intervals[]` so the very
+first `dtp_start_transfer` only asks for the still-missing seqs.
+
+Strict equality on the sidecar header gates resume — a re-staged binary
+(different SHA256) blows away stale state instead of inheriting a poisoned
+bitmap. See `satdeploy-agent/include/session_state.h` for the on-disk
+format and design rationale.
 
 ## CLI Commands
 
-```bash
-satdeploy push <app>                # Deploy file
-satdeploy push <app> --local ./path # Deploy with path override
-satdeploy push --all                # Deploy all apps
-satdeploy push --require-clean      # Refuse to deploy from dirty git tree
-satdeploy status                    # Show all app statuses with git provenance
-satdeploy list <app>                # List versions (deployed + backups)
+All run from inside CSH after `apm load`:
+
+```
+satdeploy push <app>                # Deploy file via DTP
+satdeploy push <app> -f ./path      # Path override
+satdeploy push -a                   # Deploy all apps from config
+satdeploy status                    # All app statuses with git provenance
+satdeploy list <app>                # Versions (deployed + backups)
 satdeploy rollback <app>            # Restore previous version
 satdeploy rollback <app> <hash>     # Restore specific version
 satdeploy logs <app>                # Show service logs
 satdeploy config                    # Show current config
-satdeploy demo                      # Zero-prerequisite workflow demo (local target)
-satdeploy demo stop                 # Tear down the demo
-satdeploy init                      # Generate config for real hardware
 
-# Switch targets with --config
-satdeploy status --config ~/.satdeploy/som2/config.yaml
+# Override target node ad-hoc (defaults to agent_node from config)
+satdeploy status -n 5425
 ```
 
 ## Config Structure
 
-Each target gets its own config directory (e.g. `~/.satdeploy/som1/config.yaml`):
+Each target gets its own config at `~/.satdeploy/<target>/config.yaml`:
 
 ```yaml
 name: som1
-transport: csp
 zmq_endpoint: tcp://localhost:9600
 agent_node: 5425
 ground_node: 4040
-appsys_node: 10
 
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
@@ -146,7 +135,7 @@ apps:
     remote: /opt/disco/bin/controller
     service: controller.service
     depends_on: [csp_server]
-    param: mng_controller     # libparam name (CSP only)
+    param: mng_controller     # libparam name
 
   libparam:
     local: ./build/libparam.so
@@ -159,22 +148,15 @@ The `name` field identifies this target in history records (defaults to `"defaul
 
 ## Deployment Flow
 
-### SSH (Python CLI)
-1. Stop services (dependents first)
-2. Backup current file to `{backup_dir}/{app}/{timestamp}-{hash}.bak`
-3. Upload via SFTP
-4. Start services (dependencies first)
-5. Health check
-6. Record to history.db (transport="ssh")
-
-### CSP (APM via CSH)
-1. APM sends DEPLOY command to agent (port 20)
-2. Agent stops app via libparam
-3. Agent backs up current file
-4. Agent downloads new file via DTP from ground
-5. Agent verifies checksum
-6. Agent starts app via libparam
-7. APM records to history.db (transport="csp")
+1. APM registers the local file as a DTP payload (deterministic FNV-8 of app_name → payload_id; del-then-add to refresh slot contents)
+2. APM sends DEPLOY command to agent (CSP port 20)
+3. Agent stops app via libparam (TODO)
+4. Agent backs up current file
+5. Agent downloads new file via DTP from ground (cross-pass resumable — see above)
+6. Agent verifies full SHA256 against `expected_checksum`
+7. Agent moves temp into place, applies file mode
+8. Agent starts app via libparam (TODO)
+9. APM records to `~/.satdeploy/history.db` (transport="csp")
 
 ## Dependency Resolution
 
@@ -183,18 +165,6 @@ The `name` field identifies this target in history records (defaults to `"defaul
 
 For libraries with `restart` lists, those services are used directly instead of computing the dependency graph.
 
-## Testing
-
-Tests use pytest with pytest-mock. Run with:
-
-```bash
-pytest                    # All tests
-pytest tests/test_cli_push.py  # Single file
-pytest -k "test_push"     # Pattern match
-```
-
-Test files mock SSH/CSP connections - no real network calls.
-
 ## Protocol Details
 
 ### CSP Ports (Agent)
@@ -202,10 +172,17 @@ Test files mock SSH/CSP connections - no real network calls.
 - **Port 7:** DTP metadata requests
 - **Port 8:** DTP data packets
 
-### Backup Naming
-Files are named: `{YYYYMMDD}-{HHMMSS}-{hash8}.bak`
+### Hash Format
+- **On the wire:** full 64-hex SHA256 (gates cross-pass resume — an 8-char prefix isn't collision-resistant for that purpose)
+- **Display:** `%.8s` truncation in status/list tables for readability
 
-Hash is first 8 chars of SHA256 (all components: ground, agent, APM).
+### Backup Naming
+Files are named: `{YYYYMMDD}-{HHMMSS}-{hash}.bak` where `hash` is the full 64-hex SHA256. Legacy 8-char backups still parse (the rollback hash extractor accepts both lengths).
+
+### Session State Sidecar
+- Path: `/var/lib/satdeploy/state/<app_name>.dtpstate`
+- Mode: 0600
+- Format: see `satdeploy-agent/include/session_state.h` (uint32 version + uint32 size + char[65] hash + uint32 nof_packets + uint16 effective_mtu + uint16 reserved + uint8[bitmap_bytes])
 
 ## Skill routing
 

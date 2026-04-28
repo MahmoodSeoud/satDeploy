@@ -4,29 +4,12 @@
 
 | Component | Language | Runs on | Purpose |
 |-----------|----------|---------|---------|
-| `satdeploy` | Python | Ground station | CLI for SSH deployments |
 | `satdeploy-agent` | C | Target | Handles CSP deploy commands via [libcsp](https://github.com/spaceinventor/libcsp). Must be cross-compiled for the target architecture. |
 | `satdeploy-apm` | C | Ground station | CSP deployment commands for [CSH](https://github.com/spaceinventor/csh). Compiled natively. |
 
-## Python CLI (development)
-
-```bash
-git clone --recursive https://github.com/MahmoodSeoud/satBuild.git
-cd satBuild
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-python -m pytest
-```
-
-If you already cloned without `--recursive`:
-
-```bash
-git submodule update --init --recursive
-```
-
 ## satdeploy-agent (target, cross-compiled)
 
-The agent runs on the target and is required for CSP transport.
+The agent runs on the target and serves CSP deploy requests on port 20.
 
 ### Option A: Yocto recipe (recommended)
 
@@ -62,6 +45,13 @@ ninja -C build-arm
 
 For other toolchains, point meson at your own cross-compilation file and build normally.
 
+### Cross-pass resume sidecar directory
+
+The agent writes per-app DTP receive bitmaps to `/var/lib/satdeploy/state/`
+(mode 0700) so an interrupted transfer can resume on the next pass. The
+directory is created lazily on first save. If your image's rootfs is
+read-only, mount that path on a writable volume.
+
 ## satdeploy-apm (ground station, native)
 
 [CSH](https://github.com/spaceinventor/csh) ground station module:
@@ -81,7 +71,7 @@ Then in CSH: `apm load` to activate the satdeploy commands.
 
 The APM adds `-n/--node NUM` to each command for targeting a specific CSP node (defaults to `agent_node` from config).
 
-> **Note:** libyaml, protobuf-c, and sqlite3 are bundled automatically via meson wraps, so no system packages are needed. OpenSSL is not required (SHA256 is built-in).
+> **Note:** libyaml, protobuf-c, and sqlite3 are bundled automatically via meson wraps, so no system packages are needed. SHA256 is built-in.
 
 > **CSP version pinning.** The APM is dlopen'd into CSH's process and shares `csp_packet_t` structs with it. The `lib/csp` submodule **must** match CSH's CSP version, or field offsets diverge and packets silently corrupt. Sync with:
 > ```bash

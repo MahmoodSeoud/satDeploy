@@ -6,175 +6,80 @@
 
 ![satDeploy pushing and rolling back a local test app in 20 seconds](demo/demo.gif)
 
-<sub><i><code>satdeploy demo</code> against a local throwaway target. Same hashing, backups, git provenance, and rollback code paths as a production deploy.</i></sub>
+<sub><i>Local CSP demo — same hashing, backups, git provenance, and rollback code paths as a production deploy.</i></sub>
 
 Recently, we flew [DISCO-2](https://discosat.dk/v2_disco-2/), a 3U student CubeSat, and then spent weeks trying to recreate what was on it.
 
+The payload ran a Yocto Linux image with several apps on it, each on its own release cadence, each updated the same way: rebuild locally, copy the binary over, and post "I updated the binary" in Slack. By launch, nobody could list every commit running on the hardware with confidence. After launch, rebuilding the same set on our flatsat took weeks of chasing memory and old tmux sessions, and we still ran into lib version mismatches we hadn't known were there.
 
-The payload ran a Yocto Linux image with several apps on it, each on its own release cadence, each updated the same way: rebuild locally, copy the binary over USB or SCP, and post "I updated the binary" in Slack. By launch, nobody could list every commit running on the hardware with confidence. After launch, rebuilding the same set on our flatsat took weeks of chasing memory and old tmux sessions, and we still ran into lib version mismatches we hadn't known were there.
-
-satDeploy is what we built so it doesn't happen again. Every deploy is versioned, hash-verified, and tagged with the git commit it came from. Every file can be rolled back with one command. It works over SSH for networked targets on the bench, and over [CSP](https://github.com/spaceinventor/libcsp) (CAN bus, KISS serial, ZMQ) for air-gapped satellite links.
+satDeploy is what we built so it doesn't happen again. Every deploy is versioned, hash-verified, and tagged with the git commit it came from. Every file can be rolled back with one command. It runs over [CSP](https://github.com/spaceinventor/libcsp) (CAN bus, KISS serial, ZMQ) for air-gapped satellite links, and is **resumable across pass windows** — a transfer that doesn't finish in one pass picks up exactly where it left off on the next one, no re-sending bytes the ground already shipped.
 
 > DISCO-2 is a 3U student CubeSat from Aarhus University, SDU, and ITU Copenhagen, launched on [SpaceX Transporter-16](https://x.com/i/broadcasts/1kJzDMgwZAvKv) (March 30, 2026) to image Arctic glaciers from a 510 km sun-synchronous orbit. Coverage: [Danish Space News](https://danishspacenews.substack.com/p/disco-2-one-of-the-most-ambitious), [The Danish Dream](https://thedanishdream.com/danish-society/science/danish-students-launch-satellite-to-track-melting-arctic/), [project site](https://projects.au.dk/ausat/disco-2).
 
-> **Early stage, but heading to orbit.** We built satDeploy *after* DISCO-2 launched, so the current payload is flying without it. The next uplink window will push satDeploy to the DISCO-2 payload, and every deploy after that will be versioned, hash-verified, and rollback-able from the ground. Right now it runs on our flatsat, and we're actively putting it in front of other satellite teams — the more hardware it sees on the bench, the more rough edges we find and fix together before anything flies. If you run a satellite program, we'd love to see it on your flatsat. [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues/new) or reach out.
+> **Early stage, but heading to orbit.** We built satDeploy *after* DISCO-2 launched, so the current payload is flying without it. The next uplink window will push satDeploy to the DISCO-2 payload, and every deploy after that will be versioned, hash-verified, and rollback-able from the ground. Right now it runs on our flatsat, and we're actively putting it in front of other satellite teams — the more hardware it sees on the bench, the more rough edges we find and fix together before anything flies.
 
-## Try it now
+## Components
 
-Zero dependencies beyond Python 3.8+ and git. One command from zero to a working demo:
+| Piece | Where it runs | Language |
+|-------|---------------|----------|
+| **satdeploy-agent** | Target satellite | C |
+| **satdeploy-apm** | Ground station, inside [CSH](https://github.com/spaceinventor/csh) | C |
 
-```bash
-pipx install git+https://github.com/MahmoodSeoud/satDeploy@v0.4.0
-satdeploy demo
-```
+The APM is dlopen'd into CSH and adds `satdeploy push/status/rollback/list/logs` slash commands. The agent listens on CSP port 20 for protobuf deploy commands and pulls files via DTP from the ground.
 
-Don't have `pipx`? `python3 -m pip install --user pipx && python3 -m pipx ensurepath` gets you there. It's what handles PEP 668 on recent Linux so you don't have to set up a venv by hand.
+Both write to the same `~/.satdeploy/history.db` (SQLite, WAL mode) so `satdeploy status` shows the full deploy history regardless of where the command was issued from.
 
-Prefer a venv for development? Clone + editable install still works:
+## Deploy on the ground station
 
-```bash
-git clone https://github.com/MahmoodSeoud/satDeploy && cd satDeploy
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e .
-satdeploy demo
-```
-
-> **Not on PyPI yet.** We're deliberately holding the tag-only install path until the config schema stabilises and the first pilot has landed — avoids version-yank pain while `iterate`, `validate`, and CSP-iterate are still moving. `pipx install git+…@vX.Y.Z` gives you the same one-line UX.
-
-`satdeploy demo` sets up a throwaway git repo, a local target directory, and a sample `test_app`, so you can exercise the whole loop on your laptop without any hardware.
-
-**The daily loop** — edit-to-running in one command:
+Build and install the APM (see [docs/building.md](docs/building.md) for the full version-pinning notes):
 
 ```bash
-satdeploy iterate test_app       # deploy → restart → health-check
-satdeploy watch test_app         # same loop, fires on every save
+cd satdeploy-apm
+meson setup build
+ninja -C build
+cp build/libcsh_satdeploy_apm.so ~/.local/lib/csh/
 ```
 
-**The safety net** — every deploy versioned, hash-verified, rollback-able:
+Cross-compile and install the agent on the target. Yocto recipe lives in [`meta-satdeploy/`](meta-satdeploy/); manual cross-compile:
 
 ```bash
-satdeploy status                 # what's running, which hash, which commit
-satdeploy list test_app          # all previous versions
-satdeploy rollback test_app      # undo to previous, in one command
-satdeploy demo stop              # tear it all down
+source /opt/poky/environment-setup-armv8a-poky-linux
+cd satdeploy-agent
+meson setup build-arm --cross-file yocto_cross.ini
+ninja -C build-arm
+# scp build-arm/satdeploy-agent root@target:/usr/bin/
 ```
 
-The demo uses a local directory as the "target". Swap the config for SSH (below) to hit real hardware.
-
-## Deploy to real hardware
-
-### SSH (networked target)
-
-Your target has network access. You don't need any C components, just the Python CLI.
-
-```bash
-satdeploy init                   # select "ssh", enter your target's IP
-```
-
-Then edit `~/.satdeploy/config.yaml`:
-
-```yaml
-name: flatsat
-transport: ssh
-host: 192.168.1.50
-user: root
-apps:
-  controller:
-    local: ./build/controller          # path to your local binary
-    remote: /opt/bin/controller        # where it goes on target
-    service: controller.service        # systemd service to restart (or null)
-```
-
-Deploy:
-
-```bash
-satdeploy push controller
-satdeploy status
-satdeploy rollback controller        # undo
-satdeploy logs controller            # service logs
-```
-
-### Multiple targets (fleet)
-
-A single config can hold several targets. Every target-aware command takes `-t/--target NAME`; `SATDEPLOY_TARGET` sets the default per shell. `satdeploy demo` itself spawns two local targets (`som1`, `som2`) so you can try it without edits.
-
-```yaml
-# ~/.satdeploy/config.yaml
-default_target: som1       # used when --target is not passed
-
-targets:
-  som1:
-    transport: ssh
-    host: 192.168.1.50
-    user: root
-  som2:
-    transport: ssh
-    host: 192.168.1.51
-    user: root
-  flight:
-    transport: csp          # handled by the APM, not the Python CLI
-    zmq_endpoint: tcp://localhost:9600
-    agent_node: 5425
-
-apps:                       # apps are shared across targets
-  controller:
-    local: ./build/controller
-    remote: /opt/bin/controller
-    service: controller.service
-```
-
-```bash
-satdeploy push controller --target som2     # one target
-SATDEPLOY_TARGET=som1 satdeploy iterate controller
-satdeploy status                            # all targets (dashboard-style)
-satdeploy status --target flight            # one target, detailed
-```
-
-Per-target backups live under each target's `backup_dir` (configurable, defaults sensibly for local/SSH/CSP). The dashboard (`satdeploy dev dashboard`) groups deploys by target.
-
-### CSP (air-gapped target, CAN/serial)
-
-For air-gapped targets reachable only over CSP (CAN bus, KISS serial, ZMQ), use the **satdeploy-apm** C module inside [CSH](https://github.com/spaceinventor/csh). The Python CLI handles SSH only. CSP networking is handled natively in C by the APM, which talks directly to `satdeploy-agent` on the target.
-
-| Piece | Where it runs | How to get it |
-|-------|---------------|---------------|
-| **satdeploy-apm** | Ground station (inside CSH) | [Build the APM](docs/building.md#satdeploy-apm-ground-station-native) |
-| `satdeploy-agent` | Target satellite | [Yocto recipe or cross-compile](docs/building.md#satdeploy-agent-target-cross-compiled) |
-| [CSH](https://github.com/spaceinventor/csh) | Ground station | Bridges ZMQ ↔ CAN/serial |
-
-Start the agent on the target:
-
-```bash
-satdeploy-agent -i CAN  -p can0           # CAN bus
-satdeploy-agent -i KISS -p /dev/ttyS1     # Serial link
-satdeploy-agent -i ZMQ  -p localhost      # ZMQ (local testing only)
-```
-
-From CSH on the ground station:
+Drive it from CSH:
 
 ```
+apm load
 satdeploy push controller
 satdeploy status
 satdeploy rollback controller
+satdeploy logs controller
 ```
 
-Both the Python CLI (SSH deploys) and the APM (CSP deploys) write to the same `history.db`, so `satdeploy status` shows a unified view regardless of transport.
+## Cross-pass resumable transfers
 
-If you just want to see the workflow without any of this, use `satdeploy demo`.
+CubeSat operators upload software to satellites over UHF radio links that are flaky, slow (hundreds of bps to ~10 kbps), and only available during 5-10 minute pass windows. Existing tools (`csh upload`, spaceboot) operate at the transport layer — when a pass ends mid-transfer, the next one starts over.
+
+satDeploy persists the receive bitmap to a sidecar at `/var/lib/satdeploy/state/<app>.dtpstate` whenever a pass ends partial. The next deploy for the same `(app, hash)` pre-patches the DTP request to ask only for the still-missing intervals. A re-staged binary (different SHA256) invalidates the sidecar via strict-equality content addressing, so a partial transfer can never silently inherit a stale bitmap.
+
+This is the thesis contribution: application-level pass-aware orchestration on top of libdtp's selective-repeat protocol primitives. See [`satdeploy-agent/include/session_state.h`](satdeploy-agent/include/session_state.h) for the on-disk format and design rationale.
 
 ## Docs
 
-- **[Command reference](docs/commands.md)**: every command and flag
-- **[Configuration reference](docs/configuration.md)**: full config schema, transports, dependency ordering
-- **[Building from source](docs/building.md)**: Python CLI, agent cross-compile, APM build, CSP version pinning
+- **[Command reference](docs/commands.md)** — every command and flag
+- **[Configuration reference](docs/configuration.md)** — full config schema, transports, dependency ordering
+- **[Building from source](docs/building.md)** — agent cross-compile, APM build, CSP version pinning
 
 ## Requirements
 
-- Python 3.8+
-- git (for the demo, and for provenance tracking on real deploys)
-- SSH access to target *(SSH transport)*
-- `satdeploy-agent` on target + `satdeploy-apm` + [CSH](https://github.com/spaceinventor/csh) on ground station *(CSP transport)*
-- systemd on target
+- `satdeploy-agent` on target
+- `satdeploy-apm` + [CSH](https://github.com/spaceinventor/csh) on ground station
+- A CSP transport between them (CAN bus, KISS serial, or ZMQ for local testing)
+- systemd on target (for service management)
 
 ## License
 

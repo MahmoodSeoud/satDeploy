@@ -1,12 +1,11 @@
 # Configuration Reference
 
-Each target gets its own config directory (e.g. `~/.satdeploy/som1/config.yaml`). Switch between targets with `--config`.
+Each target gets its own config directory (e.g. `~/.satdeploy/som1/config.yaml`).
 
 ## Full example
 
 ```yaml
 name: som1
-transport: csp
 zmq_endpoint: tcp://localhost:9600
 agent_node: 5425
 ground_node: 40
@@ -45,32 +44,16 @@ apps:
 | `restart` | Services to restart when this library changes |
 | `param` | libparam name for CSP start/stop |
 
-## Transports
-
-### SSH (Python CLI)
-
-Direct SSH/SFTP connection via the `satdeploy` Python CLI. Works with any Linux target.
-
-```yaml
-name: flatsat
-transport: ssh
-host: 192.168.1.50
-user: root
-```
-
-### CSP (CSH APM)
+## Transport
 
 [CubeSat Space Protocol](https://github.com/spaceinventor/libcsp) over ZMQ, CAN, or KISS serial. Requires `satdeploy-agent` on the target and `satdeploy-apm` loaded in CSH on the ground station.
 
 ```yaml
 name: satellite
-transport: csp
 zmq_endpoint: tcp://localhost:9600
 agent_node: 5425
 ground_node: 40
 ```
-
-> **Note:** CSP configs are used by the CSH APM, not the Python CLI. If you set `transport: csp` and run the Python CLI, it will tell you to use CSH instead.
 
 ## Dependency resolution
 
