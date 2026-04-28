@@ -315,14 +315,7 @@ static int satdeploy_status_cmd(struct slash *slash)
  * to use the file-based payload registry.
  */
 bool get_payload_meta(dtp_payload_meta_t *meta, uint8_t payload_id) {
-    printf("[dtp-server] sizeof(dtp_meta_req_t)=%zu  get_payload_meta(id=%u)\n",
-           sizeof(dtp_meta_req_t), payload_id);
-    fflush(stdout);
-    bool result = dtp_file_payload_get_meta(meta, payload_id);
-    printf("[dtp-server] payload lookup: %s (size=%u)\n", result ? "OK" : "NOT FOUND",
-           result ? (unsigned)meta->size : 0);
-    fflush(stdout);
-    return result;
+    return dtp_file_payload_get_meta(meta, payload_id);
 }
 
 /* DTP server thread context */
@@ -492,8 +485,6 @@ static int deploy_single_app(unsigned int node, char *app_name,
     /* Step 3: Send CMD_DEPLOY — agent will pull the file via DTP */
     csp_iface_t *default_iface = csp_iflist_get_by_isdfl(NULL);
     uint16_t ground_node = default_iface ? default_iface->addr : 0;
-
-    printf("Deploying via DTP (ground node %u, payload %u)...\n", ground_node, payload_id);
 
     Satdeploy__DeployRequest deploy_req = SATDEPLOY__DEPLOY_REQUEST__INIT;
     deploy_req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_DEPLOY;

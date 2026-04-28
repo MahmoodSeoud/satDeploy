@@ -29,6 +29,10 @@ sources = files(
 	'src/app_metadata.c',
 	'src/dtp_client.c',
 	'src/session_state.c',
+	# Same trick as the APM: providing dbg_log_impl/dbg_warn_impl ourselves
+	# stops libdtp's dtp_log.o from leaking [LOG]/[WARN] into operator output
+	# during a deploy. SATDEPLOY_DTP_VERBOSE=1 turns it back on for debugging.
+	'src/dtp_log_quiet.c',
 	'proto/deploy.pb-c.c',
 )
 

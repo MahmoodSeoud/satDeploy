@@ -57,6 +57,11 @@ satdeploy_apm = shared_library(
       'src/config.c',
       'src/output.c',
       'src/history.c',
+      # dtp_log_quiet.c provides dbg_log_impl/dbg_warn_impl/dbg_enable_colors
+      # before the linker reaches libdtp's dtp_log.o, so libdtp's unconditional
+      # [LOG]/[WARN] printfs get short-circuited. See the file header for the
+      # SATDEPLOY_DTP_VERBOSE escape hatch.
+      'src/dtp_log_quiet.c',
       version_h,
     ],
     include_directories: [includes],
