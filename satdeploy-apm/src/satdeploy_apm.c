@@ -878,9 +878,37 @@ static int satdeploy_list_cmd(struct slash *slash)
     app_name = slash->argv[argi + 1];
     optparse_del(parser);
 
+    /* Validate the app exists in config before bothering the agent. The agent
+     * happily returns "no backups" for any string, which is indistinguishable
+     * from "you typo'd the name" — list one of the known apps instead. */
+    satdeploy_config_t *config = satdeploy_config_load();
+    int known = 0;
+    if (config) {
+        for (size_t i = 0; i < config->num_apps; i++) {
+            if (strcmp(config->apps[i].name, app_name) == 0) {
+                known = 1;
+                break;
+            }
+        }
+    }
+    if (!known) {
+        printf("Error: unknown app '%s'\n", app_name);
+        if (config && config->num_apps > 0) {
+            printf("       Available in config: ");
+            for (size_t i = 0; i < config->num_apps; i++) {
+                printf("%s%s", config->apps[i].name,
+                       i + 1 < config->num_apps ? ", " : "");
+            }
+            printf("\n");
+        } else {
+            printf("       No apps in config — run 'satdeploy init' or check %s\n",
+                   "~/.satdeploy/config.yaml");
+        }
+        return SLASH_EUSAGE;
+    }
+
     /* Use agent_node from config if not specified via -n */
     if (node == 0) {
-        satdeploy_config_t *config = satdeploy_config_load();
         if (config && config->agent_node > 0) {
             node = config->agent_node;
         }
@@ -909,23 +937,53 @@ static int satdeploy_list_cmd(struct slash *slash)
     char title[128];
     snprintf(title, sizeof(title), "Versions for %s:", app_name);
     output_title(title);
+
+    /* Surface the on-target deploy path once at the top. We pull it from
+     * config rather than the agent's BackupEntry because the agent dedups
+     * "current" with its matching backup entry — when that happens, the
+     * BackupEntry's path is the .bak file, not the install slot. Config is
+     * the authoritative source for the deploy path. */
+    const char *deploy_path = NULL;
+    if (config) {
+        for (size_t i = 0; i < config->num_apps; i++) {
+            if (strcmp(config->apps[i].name, app_name) == 0) {
+                deploy_path = config->apps[i].remote_path;
+                break;
+            }
+        }
+    }
+    if (deploy_path && deploy_path[0]) {
+        printf("  Deploy path: %s\n", deploy_path);
+    }
     printf("\n");
 
     if (resp->n_backups == 0) {
-        printf("No versions found.\n");
+        printf("  No versions found on target.\n");
         satdeploy__deploy_response__free_unpacked(resp, NULL);
         return SLASH_SUCCESS;
     }
 
     output_versions_header();
-    output_separator(45);
+    output_separator(80);
 
     for (size_t i = 0; i < resp->n_backups; i++) {
         Satdeploy__BackupEntry *backup = resp->backups[i];
         /* Only first entry (version="current") is deployed */
         int is_deployed = (backup->version && strcmp(backup->version, "current") == 0);
 
-        output_version_row(backup->hash, backup->timestamp, is_deployed);
+        /* For the deployed row, show the deploy slot rather than the backup
+         * .bak path the agent returned (see comment on `deploy_path` above).
+         * Backup rows keep their .bak path so an operator can locate the file
+         * on target if they need to rescue it manually. */
+        const char *row_path = is_deployed && deploy_path && deploy_path[0]
+                                   ? deploy_path
+                                   : backup->path;
+
+        /* size_bytes is not yet on the wire (BackupEntry has hash/timestamp/
+         * version/path only) — pass 0 so SIZE renders as "-". Future: add
+         * `uint64 size_bytes` to BackupEntry. */
+        output_version_row(backup->hash, backup->timestamp, is_deployed,
+                           0, row_path);
     }
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
@@ -960,6 +1018,31 @@ static int satdeploy_logs_cmd(struct slash *slash)
 
     /* Load config for defaults */
     satdeploy_config_t *config = satdeploy_config_load();
+
+    /* Validate the app exists in config — same rationale as list_cmd. */
+    int known = 0;
+    if (config) {
+        for (size_t i = 0; i < config->num_apps; i++) {
+            if (strcmp(config->apps[i].name, app_name) == 0) {
+                known = 1;
+                break;
+            }
+        }
+    }
+    if (!known) {
+        printf("Error: unknown app '%s'\n", app_name);
+        if (config && config->num_apps > 0) {
+            printf("       Available in config: ");
+            for (size_t i = 0; i < config->num_apps; i++) {
+                printf("%s%s", config->apps[i].name,
+                       i + 1 < config->num_apps ? ", " : "");
+            }
+            printf("\n");
+        } else {
+            printf("       No apps in config — run 'satdeploy init'\n");
+        }
+        return SLASH_EUSAGE;
+    }
 
     /* Use agent_node from config if not specified via -n */
     if (node == 0 && config && config->agent_node > 0) {

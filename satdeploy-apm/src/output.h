@@ -9,6 +9,7 @@
 #define SATDEPLOY_OUTPUT_H
 
 #include <stdio.h>
+#include <stdint.h>
 
 /* ANSI color codes */
 #define COLOR_RESET       "\033[0m"
@@ -81,7 +82,7 @@ void output_status_row(const char *app_name, const char *status,
 
 /*
  * Print a list/versions header.
- * Formats: "    HASH          TIMESTAMP             STATUS"
+ * Formats: "    HASH          TIMESTAMP             STATUS    SIZE         PATH"
  */
 void output_versions_header(void);
 
@@ -92,8 +93,12 @@ void output_versions_header(void);
  *   hash: File hash
  *   timestamp: Deployment timestamp
  *   is_deployed: Whether this version is currently deployed
+ *   size_bytes: File size in bytes (0 = unknown / not displayed)
+ *   path: Path on target (deploy path for current, backup file for archives;
+ *         NULL = not displayed)
  */
-void output_version_row(const char *hash, const char *timestamp, int is_deployed);
+void output_version_row(const char *hash, const char *timestamp, int is_deployed,
+                        uint64_t size_bytes, const char *path);
 
 /*
  * Print a title line in bold.

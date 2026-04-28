@@ -108,12 +108,35 @@ void output_status_row(const char *app_name, const char *status,
 
 void output_versions_header(void)
 {
-    printf(COLOR_BRIGHT_BLACK "    %-*s\t%-*s\tSTATUS" COLOR_RESET "\n",
+    printf(COLOR_BRIGHT_BLACK "    %-*s\t%-*s\t%-8s\t%-10s\tPATH" COLOR_RESET "\n",
            COL_HASH_WIDTH, "HASH",
-           COL_TIMESTAMP_WIDTH, "TIMESTAMP");
+           COL_TIMESTAMP_WIDTH, "TIMESTAMP",
+           "STATUS",
+           "SIZE");
 }
 
-void output_version_row(const char *hash, const char *timestamp, int is_deployed)
+/* Render a byte count as "79 B", "100.0 KB", "5.0 MB", "50.0 MB" — short
+ * enough to fit a fixed column, precise enough for an operator to recognise
+ * the binary they expected. */
+static void format_size(char *buf, size_t buf_len, uint64_t bytes)
+{
+    if (bytes == 0) {
+        snprintf(buf, buf_len, "-");
+        return;
+    }
+    if (bytes < 1024) {
+        snprintf(buf, buf_len, "%llu B", (unsigned long long)bytes);
+    } else if (bytes < 1024ULL * 1024ULL) {
+        snprintf(buf, buf_len, "%.1f KB", (double)bytes / 1024.0);
+    } else if (bytes < 1024ULL * 1024ULL * 1024ULL) {
+        snprintf(buf, buf_len, "%.1f MB", (double)bytes / (1024.0 * 1024.0));
+    } else {
+        snprintf(buf, buf_len, "%.1f GB", (double)bytes / (1024.0 * 1024.0 * 1024.0));
+    }
+}
+
+void output_version_row(const char *hash, const char *timestamp, int is_deployed,
+                        uint64_t size_bytes, const char *path)
 {
     const char *symbol;
     const char *color;
@@ -137,11 +160,16 @@ void output_version_row(const char *hash, const char *timestamp, int is_deployed
         hash_short[copy] = '\0';
     }
 
-    printf("  %s%s%s %s%-*s%s\t%s%-*s%s\t%s%s%s\n",
+    char size_buf[16];
+    format_size(size_buf, sizeof(size_buf), size_bytes);
+
+    printf("  %s%s%s %s%-*s%s\t%s%-*s%s\t%s%-8s%s\t%s%-10s%s\t%s%s%s\n",
            color, symbol, COLOR_RESET,
            color, COL_HASH_WIDTH, hash_short, COLOR_RESET,
            COLOR_BRIGHT_BLACK, COL_TIMESTAMP_WIDTH, timestamp ? timestamp : "-", COLOR_RESET,
-           color, status_text, COLOR_RESET);
+           color, status_text, COLOR_RESET,
+           COLOR_WHITE, size_buf, COLOR_RESET,
+           COLOR_BRIGHT_BLACK, path ? path : "-", COLOR_RESET);
 }
 
 void output_title(const char *title)
