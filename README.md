@@ -93,6 +93,8 @@ This is the thesis contribution: application-level pass-aware orchestration on t
 - **[Command reference](docs/commands.md)** — every command and flag
 - **[Configuration reference](docs/configuration.md)** — full config schema, transports, dependency ordering
 - **[Building from source](docs/building.md)** — agent cross-compile, APM build, CSP version pinning
+- **[Changelog](CHANGELOG.md)** — what shipped in each version, including wire-format compatibility notes
+- **[Contributing](CONTRIBUTING.md)** — submodule setup, the CSP version pinning gotcha, manual loopback test recipe
 
 ## Requirements
 
