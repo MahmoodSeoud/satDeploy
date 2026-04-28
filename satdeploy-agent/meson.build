@@ -30,6 +30,7 @@ sources = files(
 	'src/app_metadata.c',
 	'src/dtp_client.c',
 	'src/session_state.c',
+	'src/sha256.c',
 	# Same trick as the APM: providing dbg_log_impl/dbg_warn_impl ourselves
 	# stops libdtp's dtp_log.o from leaking [LOG]/[WARN] into operator output
 	# during a deploy. SATDEPLOY_DTP_VERBOSE=1 turns it back on for debugging.
@@ -61,11 +62,10 @@ csp_dep = dependency('csp', fallback: ['csp', 'csp_dep'])
 param_dep = dependency('param', fallback: ['param', 'param_dep'])
 dtp_client_dep = dependency('dtp_client', fallback: ['dtp', 'dtp_client_dep'])
 proto_c_dep = dependency('libprotobuf-c')
-openssl_dep = dependency('openssl')
 m_dep = meson.get_compiler('c').find_library('m', required: false)
 pthread_dep = meson.get_compiler('c').find_library('pthread', required: true)
 
-deps = [csp_dep, param_dep, dtp_client_dep, proto_c_dep, openssl_dep, m_dep, pthread_dep]
+deps = [csp_dep, param_dep, dtp_client_dep, proto_c_dep, m_dep, pthread_dep]
 
 satdeploy_agent = executable(
 	'satdeploy-agent',

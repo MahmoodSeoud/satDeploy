@@ -14,7 +14,7 @@
 #include "satdeploy_agent.h"
 
 #include <stdint.h>
-#include <openssl/evp.h>
+#include "sha256.h"
 
 int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
     if (hash_out == NULL || hash_size < HASH_BUF_LEN) {
@@ -26,36 +26,24 @@ int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
         return -1;
     }
 
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (ctx == NULL) {
-        fclose(f);
-        return -1;
-    }
-
-    if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
-        EVP_MD_CTX_free(ctx);
-        fclose(f);
-        return -1;
-    }
+    sha256_ctx ctx;
+    sha256_init(&ctx);
 
     uint8_t buffer[8192];
     size_t n;
     while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0) {
-        EVP_DigestUpdate(ctx, buffer, n);
+        sha256_update(&ctx, buffer, n);
     }
 
     if (ferror(f)) {
-        EVP_MD_CTX_free(ctx);
         fclose(f);
         return -1;
     }
 
     fclose(f);
 
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int digest_len = 0;
-    EVP_DigestFinal_ex(ctx, digest, &digest_len);
-    EVP_MD_CTX_free(ctx);
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    sha256_final(&ctx, digest);
 
     /* Full 32-byte SHA256 → 64 hex chars + NUL.
      * Truncating to 8 chars on the wire was unsafe for cross-pass resume:

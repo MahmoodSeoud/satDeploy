@@ -13,8 +13,7 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#include <openssl/evp.h>
-
+#include "sha256.h"
 #include "session_state.h"
 #include "satdeploy_agent.h"
 
@@ -62,22 +61,14 @@ uint32_t session_state_compute_id(const char *app_name, const char *expected_has
     if (app_name == NULL || expected_hash == NULL) {
         return 1;
     }
-    EVP_MD_CTX *md_ctx = EVP_MD_CTX_new();
-    if (md_ctx == NULL) {
-        return 1;
-    }
-    if (EVP_DigestInit_ex(md_ctx, EVP_sha256(), NULL) != 1) {
-        EVP_MD_CTX_free(md_ctx);
-        return 1;
-    }
-    EVP_DigestUpdate(md_ctx, app_name, strlen(app_name));
-    EVP_DigestUpdate(md_ctx, ":", 1);
-    EVP_DigestUpdate(md_ctx, expected_hash, strlen(expected_hash));
+    sha256_ctx ctx;
+    sha256_init(&ctx);
+    sha256_update(&ctx, (const uint8_t *)app_name, strlen(app_name));
+    sha256_update(&ctx, (const uint8_t *)":", 1);
+    sha256_update(&ctx, (const uint8_t *)expected_hash, strlen(expected_hash));
 
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int digest_len = 0;
-    EVP_DigestFinal_ex(md_ctx, digest, &digest_len);
-    EVP_MD_CTX_free(md_ctx);
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    sha256_final(&ctx, digest);
 
     uint32_t id = ((uint32_t)digest[0] << 24) |
                   ((uint32_t)digest[1] << 16) |
