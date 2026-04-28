@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: satdeploy-agent interface spec
+    url: https://github.com/MahmoodSeoud/satDeploy/blob/main/docs/satellite-agent-interface.md
+    about: Implementing your own agent? Check the interface contract first.
+  - name: Cross-pass resume design
+    url: https://github.com/MahmoodSeoud/satDeploy/blob/main/satdeploy-agent/include/session_state.h
+    about: On-disk sidecar format and design rationale.
