@@ -4,10 +4,6 @@
 
 <h1 align="center">satDeploy</h1>
 
-![satDeploy pushing and rolling back a local test app in 20 seconds](demo/demo.gif)
-
-<sub><i>Local CSP demo — same hashing, backups, git provenance, and rollback code paths as a production deploy.</i></sub>
-
 Recently, we flew [DISCO-2](https://discosat.dk/v2_disco-2/), a 3U student CubeSat, and then spent weeks trying to recreate what was on it.
 
 The payload ran a Yocto Linux image with several apps on it, each on its own release cadence, each updated the same way: rebuild locally, copy the binary over, and post "I updated the binary" in Slack. By launch, nobody could list every commit running on the hardware with confidence. After launch, rebuilding the same set on our flatsat took weeks of chasing memory and old tmux sessions, and we still ran into lib version mismatches we hadn't known were there.
@@ -29,18 +25,50 @@ The APM is dlopen'd into CSH and adds `satdeploy push/status/rollback/list/logs`
 
 Both write to the same `~/.satdeploy/history.db` (SQLite, WAL mode) so `satdeploy status` shows the full deploy history regardless of where the command was issued from.
 
-## Deploy on the ground station
+## Quick start (local loopback in Docker)
 
-Build and install the APM (see [docs/building.md](docs/building.md) for the full version-pinning notes):
+The fastest way to see satDeploy work is the dev container. It bundles CSH, builds the APM, generates four test binaries (50 B → 50 MB), and wires ground + target through a local ZMQ proxy — no satellite, no CAN hardware, no Yocto SDK.
+
+Requirements: Docker.
+
+```bash
+git clone --recurse-submodules https://github.com/MahmoodSeoud/satDeploy.git
+cd satDeploy
+./scripts/docker-dev.sh
+```
+
+The entrypoint pre-builds the agent + APM, generates four test binaries (50 B → 50 MB), and drops you into a two-pane tmux: **left** = `csh` with the APM auto-loaded, **right** = `satdeploy-agent` running on ZMQ. In the left (csh) pane:
+
+```
+satdeploy push hello
+satdeploy status
+satdeploy rollback hello
+```
+
+The file lands at `/tmp/satdeploy-target/hello`, gets hash-verified, and rolls back from a backup. To exercise cross-pass resume, push the 50 MB `payload` app and Ctrl-C the agent in the right pane mid-transfer — the next push picks up from the bitmap sidecar.
+
+## Build from source (host)
+
+System dependencies (Ubuntu/Debian):
+
+```bash
+sudo apt install build-essential pkg-config meson ninja-build \
+  libzmq3-dev libsocketcan-dev libyaml-dev libbsd-dev \
+  libprotobuf-c-dev libssl-dev
+git clone --recurse-submodules https://github.com/MahmoodSeoud/satDeploy.git
+cd satDeploy
+```
+
+Build and install the APM (assumes [CSH](https://github.com/spaceinventor/csh) is already installed; the APM is dlopen'd by `csh`'s `apm load`):
 
 ```bash
 cd satdeploy-apm
 meson setup build
 ninja -C build
-cp build/libcsh_satdeploy_apm.so ~/.local/lib/csh/
+mkdir -p ~/.local/lib/csh && cp build/libcsh_satdeploy_apm.so ~/.local/lib/csh/
 ```
 
-Cross-compile and install the agent on the target. Yocto recipe lives in [`meta-satdeploy/`](meta-satdeploy/); manual cross-compile:
+Cross-compile the agent for the target. Yocto recipe lives in [`meta-satdeploy/`](meta-satdeploy/); manual cross-compile with the Poky SDK:
 
 ```bash
 source /opt/poky/environment-setup-armv8a-poky-linux
@@ -50,15 +78,7 @@ ninja -C build-arm
 # scp build-arm/satdeploy-agent root@target:/usr/bin/
 ```
 
-Drive it from CSH:
-
-```
-apm load
-satdeploy push controller
-satdeploy status
-satdeploy rollback controller
-satdeploy logs controller
-```
+Full build notes — Yocto layer, CSP version pinning, sysroot caveats — live in [docs/building.md](docs/building.md).
 
 ## Cross-pass resumable transfers
 
