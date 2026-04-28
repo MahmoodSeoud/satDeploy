@@ -693,6 +693,23 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         return;
     }
 
+    /* Reject the 8-char hash prefix that pre-v0.4.0 APMs put on the wire.
+     * The agent now strcmps the full 64-hex SHA256 (commit 3857bc0), so a
+     * truncated checksum from an old APM would fail every verify and corrupt
+     * the cross-pass-resume sidecar. Fail loudly with an upgrade hint instead. */
+    if (req->expected_checksum == NULL ||
+        strlen(req->expected_checksum) != HASH_HEX_LEN) {
+        printf("\033[31m[deploy] version skew: expected_checksum length=%zu, want %d\033[0m\n",
+               req->expected_checksum ? strlen(req->expected_checksum) : 0,
+               HASH_HEX_LEN);
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
+        resp->error_message =
+            "version skew: APM is older than agent — both must use full "
+            "64-hex SHA256 wire format (see CHANGELOG v0.4.0)";
+        return;
+    }
+
     /* TODO: Stop app via libparam if running */
 
     /* Step 2: Backup current file if it exists */
@@ -826,6 +843,20 @@ static void handle_upload_start(const Satdeploy__DeployRequest *req,
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
         resp->error_message = "No remote_path specified";
+        return;
+    }
+
+    /* Same length guard as handle_deploy — see rationale there. */
+    if (req->expected_checksum == NULL ||
+        strlen(req->expected_checksum) != HASH_HEX_LEN) {
+        printf("\033[31m[deploy] version skew: expected_checksum length=%zu, want %d\033[0m\n",
+               req->expected_checksum ? strlen(req->expected_checksum) : 0,
+               HASH_HEX_LEN);
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
+        resp->error_message =
+            "version skew: APM is older than agent — both must use full "
+            "64-hex SHA256 wire format (see CHANGELOG v0.4.0)";
         return;
     }
 
