@@ -146,19 +146,10 @@ static void handle_connection(csp_conn_t *conn) {
 
     /* Serialize and send response */
     size_t resp_size = satdeploy__deploy_response__get_packed_size(&resp);
-    printf("[DEBUG-AGENT] cmd=%d success=%d n_apps=%zu apps_ptr=%p resp_size=%zu\n",
-           req ? (int)req->command : -1,
-           resp.success, resp.n_apps, (void*)resp.apps, resp_size);
-    fflush(stdout);
     csp_packet_t *resp_packet = csp_buffer_get(resp_size);
 
     if (resp_packet != NULL) {
         resp_packet->length = satdeploy__deploy_response__pack(&resp, resp_packet->data);
-        printf("[DEBUG-AGENT] packed %u bytes:", resp_packet->length);
-        for (int i = 0; i < (int)resp_packet->length && i < 96; i++)
-            printf(" %02x", resp_packet->data[i]);
-        printf("\n");
-        fflush(stdout);
         csp_send(conn, resp_packet);
     } else {
         printf("[deploy] Failed to allocate response buffer\n");
