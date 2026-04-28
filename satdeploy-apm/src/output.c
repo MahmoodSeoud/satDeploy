@@ -5,19 +5,25 @@
 #include "output.h"
 #include <string.h>
 
+/* Defend against NULL — protobuf-c can hand back a NULL char* if an
+ * optional string field wasn't set, and printf("%s", NULL) is UB on glibc
+ * (segfaults). All three helpers route operator output, so they all need
+ * to tolerate NULL input from upstream protobuf decoders. */
+static const char *safe_msg(const char *m) { return m ? m : "(no message)"; }
+
 void output_success(const char *message)
 {
-    printf(COLOR_GREEN SYM_CHECK " %s" COLOR_RESET "\n", message);
+    printf(COLOR_GREEN SYM_CHECK " %s" COLOR_RESET "\n", safe_msg(message));
 }
 
 void output_warning(const char *message)
 {
-    printf(COLOR_YELLOW "[WARNING] %s" COLOR_RESET "\n", message);
+    printf(COLOR_YELLOW "[WARNING] %s" COLOR_RESET "\n", safe_msg(message));
 }
 
 void output_error(const char *message)
 {
-    printf(COLOR_RED "[ERROR] %s" COLOR_RESET "\n", message);
+    printf(COLOR_RED "[ERROR] %s" COLOR_RESET "\n", safe_msg(message));
 }
 
 void output_status_header(void)

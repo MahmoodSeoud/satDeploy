@@ -965,7 +965,8 @@ static int satdeploy_logs_cmd(struct slash *slash)
     }
 
     if (!resp->success) {
-        printf("Logs failed: %s\n", resp->error_message);
+        printf("Logs failed: %s\n",
+               resp->error_message ? resp->error_message : "(no error message)");
         satdeploy__deploy_response__free_unpacked(resp, NULL);
         return SLASH_EIO;
     }

@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <libgen.h>
 
 #include <csp/csp.h>
@@ -307,11 +308,26 @@ static void handle_logs(const Satdeploy__DeployRequest *req,
             break;
     }
     log_buf[total] = '\0';
-    pclose(fp);
+    int rc = pclose(fp);
+
+    /* If journalctl exited non-zero or wasn't found at all, the buffer holds
+     * the shell's error message (e.g. "sh: 1: journalctl: not found"). Don't
+     * dress it up as legitimate log output — surface a real error so the
+     * operator knows the target lacks systemd journal access. */
+    if (rc != 0) {
+        static char err_buf[8192 + 64];
+        const char *trimmed = log_buf[0] ? log_buf : "(no output from journalctl)";
+        snprintf(err_buf, sizeof(err_buf),
+                 "journalctl exited %d on target: %s",
+                 WIFEXITED(rc) ? WEXITSTATUS(rc) : -1, trimmed);
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_LOGS_FAILED;
+        resp->error_message = err_buf;
+        return;
+    }
 
     resp->success = 1;
     resp->log_output = log_buf;
-
 }
 
 /**
