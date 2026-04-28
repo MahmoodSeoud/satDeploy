@@ -1,0 +1,120 @@
+# Interactive dev container for satdeploy.
+#
+# Use case: full Linux dev environment with tmux + editors + build tools where
+# the satdeploy source tree is mounted live from the Mac host. Edits on the
+# host show up inside the container immediately, builds happen inside the
+# container against real Linux libcsp/libdtp/etc. (none of which compile on
+# darwin per CLAUDE.md).
+#
+# Usage:
+#   ./scripts/docker-dev.sh                        # build + drop into shell
+#   docker exec -it satdeploy-dev tmux             # second pane via exec
+#
+# Once inside:
+#   build-all                              # alias for both meson+ninja runs
+#   ./satdeploy-agent/build-native/satdeploy-agent --version
+#
+# Differs from the verification Dockerfile:
+#   - source is volume-mounted, not COPY'd in (live edits)
+#   - no smoke-tests baked into `docker build` (you run them yourself)
+#   - tmux + vim + nano + gdb + htop + jq + less + man pages
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+ENV LANG=C.UTF-8
+
+# Build deps + dev quality-of-life. zmqproxy is built from the libcsp source
+# tree (lib/csp/utils/zmqproxy.c), not an apt package — don't add one.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        meson \
+        ninja-build \
+        pkg-config \
+        libssl-dev \
+        libsocketcan-dev \
+        libzmq3-dev \
+        libprotobuf-c-dev \
+        protobuf-c-compiler \
+        libyaml-dev \
+        libsqlite3-dev \
+        tmux \
+        vim \
+        nano \
+        less \
+        man-db \
+        manpages \
+        manpages-dev \
+        htop \
+        gdb \
+        valgrind \
+        strace \
+        ltrace \
+        file \
+        tree \
+        jq \
+        ripgrep \
+        fd-find \
+        curl \
+        wget \
+        git \
+        openssh-client \
+        ca-certificates \
+        sudo \
+        bash-completion \
+        python3 \
+        python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Functions + aliases live in /etc/profile.d so they load for both login
+# shells (`bash -lc ...`) and interactive shells. Aliases on their own only
+# expand in interactive shells, hence functions for the build helpers.
+RUN cat >/etc/profile.d/satdeploy.sh <<'PRF'
+# ---- satdeploy dev shell ----
+export PS1='\[\e[1;32m\]satdeploy-dev\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]$ '
+export EDITOR=vim
+alias ll='ls -lah --color=auto'
+alias g='git'
+agent()       { ./satdeploy-agent/build-native/satdeploy-agent "$@"; }
+build-agent() { meson setup satdeploy-agent/build-native satdeploy-agent --reconfigure && ninja -C satdeploy-agent/build-native; }
+build-apm()   { meson setup satdeploy-apm/build satdeploy-apm --reconfigure && ninja -C satdeploy-apm/build; }
+build-all()   { build-agent && build-apm; }
+PRF
+
+# Make interactive shells also pick up the profile.d script (Ubuntu's
+# /etc/bash.bashrc is sourced for interactive non-login shells; without
+# this hook those would miss the helpers).
+RUN echo 'for f in /etc/profile.d/*.sh; do [ -r "$f" ] && . "$f"; done' \
+        >>/etc/bash.bashrc
+
+# Welcome banner runs once per shell
+RUN cat >/etc/profile.d/satdeploy-motd.sh <<'MOTD'
+cat <<EOF
+─────────────────────────────────────────────────────
+ satdeploy dev container
+   /satdeploy            — your repo (live-mounted from the Mac)
+   build-agent           — meson setup + ninja for the agent
+   build-apm             — meson setup + ninja for the APM
+   build-all             — both
+   agent --version       — shorthand for the built agent binary
+   tmux                  — multi-pane terminal
+
+ Native build is x86_64 (or arm64 on Apple Silicon Docker) — fine for
+ verification, NEVER for flight. Real flight builds go through Yocto.
+─────────────────────────────────────────────────────
+EOF
+MOTD
+
+# Reasonable tmux defaults: more scrollback + mouse on.
+RUN cat >/root/.tmux.conf <<'TCONF'
+set -g history-limit 50000
+set -g mouse on
+set -g default-terminal "screen-256color"
+set -g status-bg colour235
+set -g status-fg colour250
+TCONF
+
+WORKDIR /satdeploy
+
+CMD ["/bin/bash", "-l"]

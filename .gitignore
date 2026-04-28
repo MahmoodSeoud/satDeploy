@@ -7,4 +7,6 @@ notes/features/
 .DS_Store
 .gstack/
 build/
+build-native/
+build-arm/
 dist/
