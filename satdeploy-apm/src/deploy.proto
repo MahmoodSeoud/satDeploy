@@ -39,7 +39,7 @@ message DeployRequest {
     uint32 dtp_server_port = 8;  // DTP server port (typically 7)
     uint32 payload_id = 9;       // DTP payload identifier
     uint32 expected_size = 10;   // Expected file size in bytes
-    string expected_checksum = 11; // Expected SHA256 checksum (full 64 hex chars)
+    string expected_checksum = 11; // Expected full 64-hex SHA256 checksum (gates resume on agent)
 
     // For rollback command
     string rollback_hash = 12;  // Specific backup hash to restore (optional)
@@ -54,6 +54,11 @@ message DeployRequest {
 
     // Source file permission mode (e.g., 0755, 0644). 0 = use default (0755).
     uint32 file_mode = 17;
+
+    // DTP transfer tuning (0 = use agent defaults)
+    uint32 dtp_mtu = 18;          // Max transmission unit in bytes (default: 1024)
+    uint32 dtp_throughput = 19;   // Target throughput in bytes/s (default: 10000000)
+    uint32 dtp_timeout = 20;      // Transfer timeout in seconds (default: 60)
 }
 
 // Backup information returned by CMD_LIST_VERSIONS
@@ -61,7 +66,10 @@ message BackupEntry {
     string version = 1;      // Version string (e.g., "20250115-143022-a1b2c3d4")
     string timestamp = 2;    // Human-readable timestamp
     string hash = 3;         // File hash
-    string path = 4;         // Full path to backup file
+    string path = 4;         // Full path on target — deploy slot for "current",
+                             // backup .bak file for archives.
+    uint64 size_bytes = 5;   // File size in bytes (0 = unknown / older agent
+                             // that doesn't fill it; APM renders as "-").
 }
 
 // App status information returned by CMD_STATUS

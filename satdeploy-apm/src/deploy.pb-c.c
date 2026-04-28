@@ -472,7 +472,7 @@ const ProtobufCMessageDescriptor satdeploy__deploy_request__descriptor =
   (ProtobufCMessageInit) satdeploy__deploy_request__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCFieldDescriptor satdeploy__backup_entry__field_descriptors[4] =
+static const ProtobufCFieldDescriptor satdeploy__backup_entry__field_descriptors[5] =
 {
   {
     "version",
@@ -522,17 +522,30 @@ static const ProtobufCFieldDescriptor satdeploy__backup_entry__field_descriptors
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "size_bytes",
+    5,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT64,
+    0,   /* quantifier_offset */
+    offsetof(Satdeploy__BackupEntry, size_bytes),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned satdeploy__backup_entry__field_indices_by_name[] = {
   2,   /* field[2] = hash */
   3,   /* field[3] = path */
+  4,   /* field[4] = size_bytes */
   1,   /* field[1] = timestamp */
   0,   /* field[0] = version */
 };
 static const ProtobufCIntRange satdeploy__backup_entry__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 4 }
+  { 0, 5 }
 };
 const ProtobufCMessageDescriptor satdeploy__backup_entry__descriptor =
 {
@@ -542,7 +555,7 @@ const ProtobufCMessageDescriptor satdeploy__backup_entry__descriptor =
   "Satdeploy__BackupEntry",
   "satdeploy",
   sizeof(Satdeploy__BackupEntry),
-  4,
+  5,
   satdeploy__backup_entry__field_descriptors,
   satdeploy__backup_entry__field_indices_by_name,
   1,  satdeploy__backup_entry__number_ranges,

@@ -970,11 +970,12 @@ static int satdeploy_list_cmd(struct slash *slash)
                                    ? deploy_path
                                    : backup->path;
 
-        /* size_bytes is not yet on the wire (BackupEntry has hash/timestamp/
-         * version/path only) — pass 0 so SIZE renders as "-". Future: add
-         * `uint64 size_bytes` to BackupEntry. */
+        /* Old agents (before BackupEntry.size_bytes was added) leave the
+         * field at proto3 default 0 — output_version_row renders "-" in
+         * that case, so the column degrades cleanly across mixed-version
+         * deploys. */
         output_version_row(backup->hash, backup->timestamp, is_deployed,
-                           0, row_path);
+                           backup->size_bytes, row_path);
     }
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);

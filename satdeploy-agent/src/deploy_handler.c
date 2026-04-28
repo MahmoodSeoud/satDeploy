@@ -363,6 +363,15 @@ static void backup_collect_callback(const char *version, const char *timestamp,
     entry->hash = strdup(hash ? hash : "");
     entry->path = strdup(path ? path : "");
 
+    /* Stat the backup file so the ground side can show real sizes in
+     * `satdeploy list`. stat() failure leaves size_bytes at 0, which the
+     * APM renders as "-" — same as an older agent that didn't fill the
+     * field. proto3 default; no wire incompatibility. */
+    struct stat st;
+    if (path && stat(path, &st) == 0) {
+        entry->size_bytes = (uint64_t)st.st_size;
+    }
+
     col->entries[col->count++] = entry;
 }
 
@@ -445,6 +454,10 @@ static void handle_list_versions(const Satdeploy__DeployRequest *req,
                 current->timestamp = strdup(deployed_at);
                 current->hash = strdup(actual_hash);
                 current->path = strdup(remote_path);
+                struct stat st;
+                if (stat(remote_path, &st) == 0) {
+                    current->size_bytes = (uint64_t)st.st_size;
+                }
                 col.entries[col.count++] = current;
             }
         }
