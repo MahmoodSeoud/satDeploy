@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 
 #include "sha256.h"
@@ -445,18 +446,32 @@ static int deploy_single_app(unsigned int node, char *app_name,
      * Deterministic FNV-8 of app_name as the payload_id, with del-then-add to
      * refresh whatever's currently in that slot. This way the agent can map
      * (app_name → payload_id) without an extra round-trip, and a re-staged
-     * binary correctly overwrites stale registry contents on the same slot. */
+     * binary correctly overwrites stale registry contents on the same slot.
+     *
+     * dtp_file_payload_del prints 'ERROR: Payload id: X does not exist' to
+     * stdout when the slot is empty (which is the common case on a fresh
+     * push). That looks scary but is expected; suppress it by swapping fd 1
+     * to /dev/null for the duration of the call. */
     uint8_t payload_id = payload_id_for_app(app_name);
-    dtp_file_payload_del(payload_id);
-    printf("[dtp] Registering payload id=%u file=%s\n", payload_id, local_path);
+
     fflush(stdout);
+    int saved_stdout = dup(STDOUT_FILENO);
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) {
+        dup2(devnull, STDOUT_FILENO);
+        close(devnull);
+    }
+    dtp_file_payload_del(payload_id);
+    fflush(stdout);
+    if (saved_stdout >= 0) {
+        dup2(saved_stdout, STDOUT_FILENO);
+        close(saved_stdout);
+    }
+
     if (!dtp_file_payload_add(payload_id, local_path)) {
         printf("Error: Failed to register file as DTP payload\n");
         return SLASH_EIO;
     }
-    printf("[dtp] Payload registered. Current payloads:\n");
-    dtp_file_payload_info();
-    fflush(stdout);
 
     /* Step 2: Start DTP server in background thread */
     dtp_server_ctx_t dtp_ctx = { .exit_flag = false, .ready = false };
