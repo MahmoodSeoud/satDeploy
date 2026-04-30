@@ -11,7 +11,7 @@ build-native/
 build-arm/
 dist/
 
-# Experiment harness — CSVs and per-trial logs are reproducible from the
-# scripts in experiments/, so we don't track them.
+# Experiment harness — CSV outputs are reproducible from the scripts in
+# experiments/runs/, so we don't track them. (Per-trial log directories
+# land in /tmp/satdeploy-experiments/, also excluded.)
 experiments/results/
-experiments/runs/
