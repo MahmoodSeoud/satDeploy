@@ -32,7 +32,14 @@ CLIENT_BIN="$BUILD_DIR/bare-dtp-client"
 
 [ -x "$SERVER_BIN" ] || { echo "FAIL: $SERVER_BIN not built — run 'ninja -C build' first" >&2; exit 1; }
 [ -x "$CLIENT_BIN" ] || { echo "FAIL: $CLIENT_BIN not built — run 'ninja -C build' first" >&2; exit 1; }
-command -v zmqproxy >/dev/null || { echo "FAIL: zmqproxy not in PATH" >&2; exit 1; }
+
+# Use our minimal in-tree proxy. The libcsp-bundled examples/zmqproxy has a
+# heap-corruption bug in its capture thread (see src/mini_zmqproxy.c comment).
+ZMQPROXY="${ZMQPROXY:-$BUILD_DIR/mini-zmqproxy}"
+[ -x "$ZMQPROXY" ] || {
+  echo "FAIL: $ZMQPROXY not built — run 'ninja -C build mini-zmqproxy'" >&2
+  exit 1
+}
 command -v sha256sum >/dev/null || { echo "FAIL: sha256sum not in PATH" >&2; exit 1; }
 
 TRIALS="${TRIALS:-30}"
@@ -67,7 +74,7 @@ run_trial() {
 	local src_hash
 	src_hash="$(sha256sum "$payload" | awk '{print $1}')"
 
-	zmqproxy >/dev/null 2>&1 &
+	"$ZMQPROXY" >/dev/null 2>&1 &
 	local zmq_pid=$!
 	sleep 0.4
 

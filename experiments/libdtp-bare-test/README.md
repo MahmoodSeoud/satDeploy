@@ -38,14 +38,39 @@ nothing feeds back into libdtp.
 
 ```
 src/
-  csp_init.{h,c}    bring CSP up over zmqproxy on localhost
+  csp_init.{h,c}    bring CSP up over the local broker
   server.c          register one file as a payload, run dtp_server_main
   client.c          one dtp_start_transfer, write JSON stats to stdout
+  mini_zmqproxy.c   minimal CSP-over-ZMQ broker (see "On zmqproxy" below)
 scripts/
   sweep.sh          3 sizes × N=30 trials, append to results/ CSV
-results/            output lands here
-meson.build         reuses ../../satdeploy-agent/lib as subproject_dir
+results/            output lands here (bare_tail_race.csv tracked)
+meson.build
 ```
+
+The build pulls libcsp/libparam/libdtp from `subprojects/` symlinks that
+point at `../../satdeploy-agent/lib/{csp,param,dtp}`. The symlinks are
+created at setup time (see Build below) and not tracked in git, since
+meson rejects relative `subproject_dir` and we don't want to duplicate
+the submodules.
+
+## On zmqproxy
+
+The libcsp-bundled `examples/zmqproxy` has a heap-corruption bug: its
+unconditional capture/logging thread allocates a 1024-byte
+`csp_packet_t` and `memcpy`s the full ZMQ message into `frame_begin`,
+overflowing once `csp:buffer_size` exceeds 1024 (which it does for any
+real DTP/CSP build). The process dies with `malloc(): corrupted top
+size` mid-transfer.
+
+That bug is **unrelated to the libdtp tail race** but produces results
+that look identical at first glance — packets stop arriving, transfer
+fails. To keep the broker out of the failure mode under test, this
+project ships its own `mini-zmqproxy`: an XSUB↔XPUB `zmq_proxy` with
+nothing else. Same wire protocol; no capture thread; no heap bug.
+
+Worth filing upstream against libcsp separately — it's a real defect,
+just not the one we're investigating here.
 
 ## Build
 
@@ -54,16 +79,24 @@ toolchain — meson, ninja, gcc, libcrypto, zmqproxy, libcsp build deps).
 
 ```bash
 # 1. Make sure the agent's submodules are checked out — the bare test
-#    points its subproject_dir at satdeploy-agent/lib so it shares
-#    libcsp / libparam / libdtp with the production build.
+#    builds against satdeploy-agent/lib/{csp,param,dtp}, sharing the same
+#    libdtp pinned by the production agent.
 cd /satdeploy
 git submodule update --init --recursive
 
-# 2. Build native x86 — no ARM cross-compile, this is for falsification
-#    on the loopback transport, not for flight hardware.
+# 2. Wire the agent's lib trees into our subprojects/ via symlink. Meson
+#    rejects relative subproject_dir, and we don't want to duplicate the
+#    submodules, so symlinks bridge the two.
 cd experiments/libdtp-bare-test
+mkdir -p subprojects
+ln -sfn ../../../satdeploy-agent/lib/csp   subprojects/csp
+ln -sfn ../../../satdeploy-agent/lib/param subprojects/param
+ln -sfn ../../../satdeploy-agent/lib/dtp   subprojects/dtp
+
+# 3. Build native x86 — no ARM cross-compile. This is for falsification
+#    on the loopback transport, not flight hardware.
 meson setup build
-ninja -C build
+ninja -C build   # produces bare-dtp-server, bare-dtp-client, mini-zmqproxy
 ```
 
 ## Run

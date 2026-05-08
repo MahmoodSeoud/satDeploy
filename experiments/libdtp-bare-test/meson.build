@@ -2,10 +2,10 @@ project(
 	'libdtp-bare-test',
 	'c',
 	version: '0.1.0',
-	# Reuse the agent's submodules so we test the exact libdtp + libcsp + libparam
-	# shipped by satdeploy. The point of the bare test is to exercise the same
-	# libdtp the deployment uses, without satdeploy's wrapping.
-	subproject_dir: '../../satdeploy-agent/lib',
+	# subprojects/{csp,param,dtp} are symlinks to ../../satdeploy-agent/lib/*
+	# so we test the exact libdtp + libcsp + libparam shipped by satdeploy
+	# without satdeploy's wrapping. Meson doesn't allow relative
+	# subproject_dir, so symlinks are the cheapest way to share the trees.
 	default_options: [
 		'c_std=gnu11',
 		'default_library=static',
@@ -45,4 +45,16 @@ executable(
 	'src/client.c',
 	'src/csp_init.c',
 	dependencies: common_deps + [dtp_client_dep],
+)
+
+# Minimal CSP-over-ZMQ broker. We don't use the libcsp-bundled examples/zmqproxy
+# because its capture thread has a heap-corruption bug (malloc(1024) too small
+# for the CSP packet layout once buffer_size > 1024). That crash kills the
+# broker mid-transfer and produces results that look like libdtp loss when
+# they're actually a transport-broker bug. Our proxy only does zmq_proxy().
+zmq_dep = dependency('libzmq', required: true)
+executable(
+	'mini-zmqproxy',
+	'src/mini_zmqproxy.c',
+	dependencies: [zmq_dep],
 )

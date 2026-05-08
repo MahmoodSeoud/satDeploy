@@ -1,0 +1,4 @@
+# meson workspace state — recreated by 'meson setup' + the symlink commands
+# documented in README.md. Not source.
+build/
+subprojects/
