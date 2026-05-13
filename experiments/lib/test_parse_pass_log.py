@@ -46,6 +46,64 @@ class StripAnsiTests(unittest.TestCase):
         self.assertEqual(_strip_ansi("hello world"), "hello world")
 
 
+class CadenceDetectionTests(unittest.TestCase):
+    """The stress test found that not every pass uses `watch -n 5000`.
+    Mixed cadences appear in real logs (5000, 2000, 500, 50, 5 ms). The
+    parser must read the actual cadence from the CSH watch banner instead
+    of hardcoding 5s."""
+
+    def test_default_5s_when_no_banner(self):
+        log = (
+            "Ping node 5386 size 0 timeout 5000: No reply\n"
+            "Ping node 5386 size 0 timeout 5000: No reply\n"
+            "Ping node 5386 size 0 timeout 5000: Reply in 1267 [ms]\n"
+        )
+        path = _write_log(log)
+        attempts = parse_bird_log(path)
+        self.assertEqual([a.t_offset_s for a in attempts], [0.0, 5.0, 10.0])
+
+    def test_uses_watch_banner_cadence(self):
+        # 2000ms banner -> 2.0s between attempts
+        log = (
+            'Executing "drun ping " each 2000 ms - press <enter> to stop\n'
+            "Ping node 5386 size 0 timeout 5000: No reply\n"
+            "Ping node 5386 size 0 timeout 5000: No reply\n"
+            "Ping node 5386 size 0 timeout 5000: Reply in 1265 [ms]\n"
+        )
+        path = _write_log(log)
+        attempts = parse_bird_log(path)
+        self.assertEqual([a.t_offset_s for a in attempts], [0.0, 2.0, 4.0])
+
+    def test_cadence_switch_mid_log(self):
+        # Two watch invocations at different cadences. Attempts before the
+        # switch use the first cadence; attempts after use the second.
+        log = (
+            'Executing "drun ping " each 5000 ms - press <enter> to stop\n'
+            "Ping node 5386 size 0 timeout 5000: No reply\n"
+            "Ping node 5386 size 0 timeout 5000: No reply\n"
+            'Executing "drun ping " each 500 ms - press <enter> to stop\n'
+            "Ping node 5386 size 0 timeout 5000: Reply in 1267 [ms]\n"
+            "Ping node 5386 size 0 timeout 5000: Reply in 1265 [ms]\n"
+        )
+        path = _write_log(log)
+        attempts = parse_bird_log(path)
+        # First two at 5s gaps: 0.0, 5.0
+        # Then cadence switches to 0.5s; the third attempt comes 0.5s after.
+        self.assertEqual([a.t_offset_s for a in attempts],
+                         [0.0, 5.0, 5.5, 6.0])
+
+    def test_unusual_short_cadence(self):
+        # Real logs contain `watch -n 5` (5ms — operator stress-test runs).
+        log = (
+            'Executing "drun ping " each 5 ms - press <enter> to stop\n'
+            "Ping node 5386 size 0 timeout 5000: No reply\n"
+            "Ping node 5386 size 0 timeout 5000: No reply\n"
+        )
+        path = _write_log(log)
+        attempts = parse_bird_log(path)
+        self.assertEqual([a.t_offset_s for a in attempts], [0.0, 0.005])
+
+
 class ParseBirdLogTests(unittest.TestCase):
     """Outcome-driven parsing: each Ping line is one attempt, regardless of
     whether `Executing:` headers appear (operators use `watch` which fires
@@ -177,6 +235,57 @@ class AttemptsToStatsTests(unittest.TestCase):
         stats = attempts_to_stats(attempts)
         self.assertEqual(stats["fail_runs"], {1: 1, 2: 1, 3: 1})
         self.assertEqual(stats["max_fail_run"], 3)
+
+    def test_three_zone_markov_separates_aos_from_window(self):
+        # 10 leading FAILs (AOS) then O F F O F O then 5 trailing FAILs (LOS).
+        # Total: F*10 + O + F + F + O + F + O + F*5
+        outcomes = (["FAIL"] * 10
+                    + ["OK", "FAIL", "FAIL", "OK", "FAIL", "OK"]
+                    + ["FAIL"] * 5)
+        attempts = self._build(outcomes, rtts=[1265, 1267, 1264])
+        stats = attempts_to_stats(attempts)
+
+        # In-window slice = first_ok (idx 10) to last_ok (idx 15) inclusive:
+        # O F F O F O — six attempts, three OKs, max in-window fail run = 2.
+        # Pairs inside window: OF, FF, FO, OF, FO.
+        #   From F (positions 11, 12, 14):
+        #     11→F (FF), 12→O (FO), 14→O (FO) → P(F|F)=1/3, P(O|F)=2/3
+        #   From O (positions 10, 13):
+        #     10→F, 13→F → P(F|O)=1.0, P(O|O)=0
+        self.assertEqual(stats["max_in_window_fail_run"], 2)
+        self.assertEqual(stats["in_window_fail_runs"], {1: 1, 2: 1})
+
+        mw = stats["markov_in_window"]
+        self.assertAlmostEqual(mw["P_F_given_F"], 1/3, places=3)
+        self.assertAlmostEqual(mw["P_O_given_F"], 2/3, places=3)
+        self.assertAlmostEqual(mw["P_F_given_O"], 1.0, places=3)
+
+        # Dead-zone Markov: 10 F's at AOS + 5 F's at LOS → 9 FF pairs at AOS,
+        # 4 FF pairs at LOS. Total: 13 FF pairs, no O transitions inside.
+        # P(F|F) should be 1.0 — dead-zone is pure F→F.
+        ml = stats["markov_aos_los"]
+        self.assertAlmostEqual(ml["P_F_given_F"], 1.0, places=3)
+
+        # Overall Markov is dominated by the dead zones and will be much
+        # higher than the in-window value. That's the whole point of
+        # splitting them.
+        mo = stats["markov_overall"]
+        self.assertGreater(mo["P_F_given_F"], mw["P_F_given_F"])
+
+    def test_no_window_skips_in_window_stats(self):
+        # All FAIL → no comm window → in_window stats should be empty/zero.
+        attempts = self._build(["FAIL"] * 10)
+        stats = attempts_to_stats(attempts)
+        self.assertEqual(stats["max_in_window_fail_run"], 0)
+        self.assertEqual(stats["in_window_fail_runs"], {})
+        self.assertEqual(stats["markov_in_window"], {})
+
+    def test_markov_top_level_matches_overall(self):
+        # Backwards compatibility: `markov` key == `markov_overall`.
+        attempts = self._build(["FAIL", "FAIL", "OK", "FAIL", "OK"],
+                               rtts=[1265, 1267])
+        stats = attempts_to_stats(attempts)
+        self.assertEqual(stats["markov"], stats["markov_overall"])
 
 
 class AttemptsToPatternTests(unittest.TestCase):

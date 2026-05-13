@@ -253,6 +253,14 @@ _PING_FAIL = re.compile(r"^Ping node\s+\d+\s.*No reply\s*$")
 _NORESP = re.compile(r"^No response\s*$")
 # A successful hk retrieve dumps a "Timestamp NNNN" line first.
 _HK_OK = re.compile(r"^Timestamp\s+\d+\s*$")
+# CSH watch banner — emitted once per `watch -n N ...` invocation. The
+# number is in milliseconds (e.g. "each 5000 ms" = 5 sec between attempts).
+# Stress-test finding: not all passes use 5000ms. Observed mix includes
+# 5000 (5364), 2000 (176), 500 (170), 50 (165), 5 (166), and bare
+# `ping` (without drun) at 1000 / 100 / 1 ms. The parser must track the
+# active cadence per attempt — assuming a fixed 5s is wrong for ~13% of
+# passes and produces misaligned pattern-file timestamps.
+_WATCH = re.compile(r'Executing "[^"]+" each (\d+) ms')
 
 
 def _strip_ansi(text: str) -> str:
@@ -282,9 +290,11 @@ def parse_bird_log(path: Path, interval_s: float = 5.0,
                    command_filter: str = "ping") -> list[Attempt]:
     """Walk a CSH session capture, yield attempts of the chosen command.
 
-    The bird's operators typically run `watch -n 5000 drun <cmd>` (5 s cadence)
-    during a pass. `interval_s` reflects that and is used to assign
-    monotonic timestamps to attempts since drun itself does not log a clock.
+    Cadence detection: the parser scans for CSH watch banners
+    (`Executing "drun ..." each N ms`) and uses N as the gap between
+    subsequent attempts. The `interval_s` parameter is only used as the
+    default before any watch banner appears (operators sometimes type
+    `drun ping` once before starting a watch loop).
 
     The parser is outcome-driven: it counts each outcome line (Ping reply /
     No reply / No response / hk data dump) as one attempt. The `Executing:`
@@ -304,13 +314,25 @@ def parse_bird_log(path: Path, interval_s: float = 5.0,
     want_ping = command_filter in ("ping", "all")
     want_hk = command_filter in ("hk", "all")
 
+    # Active cadence in seconds. Starts at the caller-supplied default and
+    # updates whenever a `Executing "drun ..." each N ms` banner appears.
+    # The first attempt is anchored at t=0; subsequent attempts advance by
+    # whatever cadence was active when their outcome fired. This way a
+    # cadence change mid-log shifts later timestamps correctly without
+    # retroactively touching earlier ones.
+    cadence_s: float = float(interval_s)
+    last_t_s: float | None = None
+
     def _push(command: str, outcome: str, rtt_ms: int | None) -> None:
+        nonlocal last_t_s
         idx = len(attempts)
+        t = 0.0 if last_t_s is None else last_t_s + cadence_s
         attempts.append(Attempt(
-            idx=idx, t_offset_s=idx * interval_s,
+            idx=idx, t_offset_s=t,
             range_rate_kms=cur_rr, doppler_hz=cur_dop,
             command=command, outcome=outcome, rtt_ms=rtt_ms,
         ))
+        last_t_s = t
 
     # Track which command type is "currently being watched" so that a bare
     # `No response` (used by hk) doesn't get attributed to ping. Updated on
@@ -319,6 +341,14 @@ def parse_bird_log(path: Path, interval_s: float = 5.0,
 
     for raw in text.split("\n"):
         line = raw.rstrip()
+
+        # Cadence banner — set the active interval for subsequent attempts.
+        m = _WATCH.search(line)
+        if m:
+            ms = int(m.group(1))
+            if ms > 0:
+                cadence_s = ms / 1000.0
+            continue
 
         m = _RR.search(line)
         if m:
@@ -398,37 +428,76 @@ def attempts_to_stats(attempts: list[Attempt]) -> dict:
                                     if window_attempts else 0.0),
         }
 
-    # Failure-run length distribution.
-    fail_runs: list[int] = []
-    cur = 0
-    for a in attempts:
-        if a.outcome == "FAIL":
-            cur += 1
-        else:
-            if cur > 0:
-                fail_runs.append(cur)
-            cur = 0
-    if cur > 0:
-        fail_runs.append(cur)
+    # Failure-run length distribution helpers. The stress test found that
+    # most "long" runs are AOS dead zones (link not yet acquired), not real
+    # in-window bursts. Compute three histograms so callers can tell the
+    # difference: overall, in-window only, and dead-zone only.
+    def _fail_runs(seq: list[Attempt]) -> list[int]:
+        runs: list[int] = []
+        cur = 0
+        for a in seq:
+            if a.outcome == "FAIL":
+                cur += 1
+            else:
+                if cur > 0:
+                    runs.append(cur)
+                cur = 0
+        if cur > 0:
+            runs.append(cur)
+        return runs
+
+    fail_runs = _fail_runs(attempts)
     fail_run_hist = dict(sorted(Counter(fail_runs).items()))
 
-    # Markov / Gilbert-Elliott transition probabilities. Counted over
-    # consecutive attempt pairs; not split by window vs dead-zone because
-    # the simulator's pattern file will encode dead zones explicitly.
-    n_FF = n_FO = n_OF = n_OO = 0
-    for prev, nxt in zip(attempts, attempts[1:]):
-        a, b = prev.outcome, nxt.outcome
-        if a == "FAIL" and b == "FAIL": n_FF += 1
-        elif a == "FAIL" and b == "OK": n_FO += 1
-        elif a == "OK" and b == "FAIL": n_OF += 1
-        elif a == "OK" and b == "OK":   n_OO += 1
-    markov: dict = {}
-    if (n_FF + n_FO) > 0:
-        markov["P_O_given_F"] = round(n_FO / (n_FF + n_FO), 3)
-        markov["P_F_given_F"] = round(n_FF / (n_FF + n_FO), 3)
-    if (n_OF + n_OO) > 0:
-        markov["P_O_given_O"] = round(n_OO / (n_OF + n_OO), 3)
-        markov["P_F_given_O"] = round(n_OF / (n_OF + n_OO), 3)
+    # In-window subset: only the attempts between first_ok and last_ok
+    # inclusive. Use the previously-computed window dict if present.
+    in_window_attempts: list[Attempt] = []
+    if window:
+        first_t = window["first_ok_t_s"]
+        last_t = window["last_ok_t_s"]
+        in_window_attempts = [a for a in attempts
+                              if first_t <= a.t_offset_s <= last_t]
+    in_window_fail_runs = _fail_runs(in_window_attempts)
+    in_window_fail_run_hist = dict(sorted(Counter(in_window_fail_runs).items()))
+
+    # Markov / Gilbert-Elliott transition probabilities. The previous
+    # version mixed in the AOS dead zone, inflating P(F|F) toward 1.0.
+    # Now we compute three sets so callers can pick the right one:
+    #   * overall    — every consecutive pair, dominated by AOS in real logs
+    #   * in_window  — pairs inside [first_ok, last_ok] only; this is what
+    #                  the simulator's gilbert action should target
+    #   * aos_los    — pairs OUTSIDE the comm window (dead zones)
+    def _markov(seq: list[Attempt]) -> dict:
+        n_FF = n_FO = n_OF = n_OO = 0
+        for prev, nxt in zip(seq, seq[1:]):
+            a, b = prev.outcome, nxt.outcome
+            if a == "FAIL" and b == "FAIL": n_FF += 1
+            elif a == "FAIL" and b == "OK": n_FO += 1
+            elif a == "OK" and b == "FAIL": n_OF += 1
+            elif a == "OK" and b == "OK":   n_OO += 1
+        out: dict = {}
+        if (n_FF + n_FO) > 0:
+            out["P_O_given_F"] = round(n_FO / (n_FF + n_FO), 3)
+            out["P_F_given_F"] = round(n_FF / (n_FF + n_FO), 3)
+        if (n_OF + n_OO) > 0:
+            out["P_O_given_O"] = round(n_OO / (n_OF + n_OO), 3)
+            out["P_F_given_O"] = round(n_OF / (n_OF + n_OO), 3)
+        return out
+
+    # Dead-zone subset is everything OUTSIDE the window.
+    if window:
+        in_window_idx_set = {a.idx for a in in_window_attempts}
+        aos_los_attempts = [a for a in attempts if a.idx not in in_window_idx_set]
+    else:
+        aos_los_attempts = attempts
+
+    markov_overall = _markov(attempts)
+    markov_in_window = _markov(in_window_attempts)
+    markov_aos_los = _markov(aos_los_attempts)
+
+    # Backwards-compatible top-level `markov` key kept (== markov_overall)
+    # so existing pattern files / sidecar JSON consumers don't break.
+    markov = markov_overall
 
     # Pass quality classification.
     duration_s = window.get("duration_s", 0.0)
@@ -452,7 +521,13 @@ def attempts_to_stats(attempts: list[Attempt]) -> dict:
         "comm_window": window,
         "fail_runs": fail_run_hist,
         "max_fail_run": max(fail_runs) if fail_runs else 0,
+        "in_window_fail_runs": in_window_fail_run_hist,
+        "max_in_window_fail_run": (max(in_window_fail_runs)
+                                   if in_window_fail_runs else 0),
         "markov": markov,
+        "markov_overall": markov_overall,
+        "markov_in_window": markov_in_window,
+        "markov_aos_los": markov_aos_los,
         "quality": quality,
     }
 
