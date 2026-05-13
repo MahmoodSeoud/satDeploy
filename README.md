@@ -107,8 +107,9 @@ The state lives on persistent flash, so it survives a full agent reboot or OBC p
 | 1% configured loss (1 MB) | 5 | 5/5 complete, mean 1.8 retry rounds | `experiments/results/loss_rates.csv` |
 | 5% configured loss | 5 | 5/5 complete, mean 6.8 retry rounds (close to the 8-round budget edge) | same |
 | 10% configured loss | 5 | 0/5 complete in single pass; all 5 hit the 8-round cap and persist state for cross-pass resume | same |
+| Real DISCO-2 in-window FER (28%-86%, 1 MB) | 6 | naive 0/6; smart 0/6 single-pass, 5/6 hit the 8-round cap (the 6th had no agent status line); mean actual FER 40% | `experiments/results/bird_sweep.csv`, `experiments/results/bird_sweep_report.md` |
 
-Reproducible via `experiments/sweep_tail_race.sh` and `experiments/sweep_loss_rates.sh`. The 8-round budget covers up to ~5% loss in a single pass; beyond that the cross-pass resume mechanism is what closes the gap. F6 reboot demo numbers (real radio, real loss, real PDU power-cycle) land Tuesday 2026-05-05.
+Reproducible via `experiments/sweep_tail_race.sh`, `experiments/sweep_loss_rates.sh`, and `experiments/sweep_bird_patterns.sh`. The 8-round budget covers up to ~5% loss in a single pass; beyond that the cross-pass resume mechanism is what closes the gap. The bird-pattern row uses Bernoulli delivery at each trace's measured in-window FER, justified by `experiments/burstiness_analysis.py` (85% of in-window passes fit a geometric tail). F6 reboot demo numbers (real radio, real loss, real PDU power-cycle) land Tuesday 2026-05-05.
 
 ## Docs
 
