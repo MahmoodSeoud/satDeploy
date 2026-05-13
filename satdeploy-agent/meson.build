@@ -66,6 +66,21 @@ if test_loss_filter
 	# The original symbol becomes __real_csp_qfifo_write for the wrapper
 	# to call after the drop / latency decision.
 	test_loss_filter_link_args += '-Wl,--wrap=csp_qfifo_write'
+	# Stress-test finding: with LTO enabled (the project default), gcc
+	# inlines csp_qfifo_write call sites INSIDE libcsp.a past the linker
+	# stage, so --wrap never gets a chance to intercept. The hook then
+	# fires only on the test harness's external mock, never on real
+	# ZMQ traffic — exactly the silent-failure mode the wrap is supposed
+	# to fix.
+	#
+	# IMPORTANT: set -Db_lto=false at meson setup time when this option
+	# is enabled. Adding `-fno-lto` to c_args alone is not enough because
+	# subprojects (libcsp, libdtp) inherit LTO from the project default.
+	# The test build is correct ONLY when invoked as:
+	#
+	#     meson setup build-loss <src> -Dtest_loss_filter=true -Db_lto=false
+	#
+	# Flight builds leave LTO on for size. See run-container-build.sh.
 endif
 
 # F3.b naive-baseline gate. Local to the agent — the change is in

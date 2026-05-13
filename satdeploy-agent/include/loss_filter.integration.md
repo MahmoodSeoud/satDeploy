@@ -104,7 +104,13 @@ same statistics counters in `loss_filter_stats()`.
 cd satdeploy-agent
 
 # Test variant (loss filter compiled in, router-level hook active):
-meson setup build-loss --wipe -Dtest_loss_filter=true
+# IMPORTANT: -Db_lto=false is REQUIRED. With LTO on (the project default
+# for flight), gcc inlines libcsp.a's csp_qfifo_write call sites past the
+# linker stage, so -Wl,--wrap=csp_qfifo_write never gets a chance to
+# intercept. The hook compiles fine and the wrap-mechanism unit test
+# passes against mocked symbols, but the real ZMQ recv path bypasses
+# the hook silently. Caught by experiments/test_e2e_bird_pattern.sh.
+meson setup build-loss --wipe -Dtest_loss_filter=true -Db_lto=false
 ninja -C build-loss
 
 # Flight variant (default — zero filter code, libcsp linked normally):

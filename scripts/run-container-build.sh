@@ -52,10 +52,15 @@ echo "    iface hook absent from flight build: ok"
 
 # -------------------------------------------------------------------------
 echo
-echo ">>> Building TEST variant (-Dtest_loss_filter=true)"
+echo ">>> Building TEST variant (-Dtest_loss_filter=true, LTO off)"
+# LTO must be off for the test build: with LTO on, gcc inlines libcsp.a's
+# csp_qfifo_write call sites past the linker, so -Wl,--wrap never intercepts.
+# This is the difference between the wrap-mechanism test passing (with mocked
+# symbols, LTO doesn't matter) and the real-ZMQ E2E failing silently.
 rm -rf satdeploy-agent/build-loss
 meson setup satdeploy-agent/build-loss satdeploy-agent \
-    -Dtest_loss_filter=true
+    -Dtest_loss_filter=true \
+    -Db_lto=false
 ninja -C satdeploy-agent/build-loss
 
 TEST_BIN=satdeploy-agent/build-loss/satdeploy-agent
