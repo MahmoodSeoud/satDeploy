@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <time.h>
+#include <unistd.h>  /* fsync */
 
 #include <csp/csp.h>
 #include <dtp/dtp.h>
@@ -29,8 +30,17 @@
  * DTP's data path is connectionless (by design — see lib/dtp/README.rst).
  * The protocol's reliability story is "ask again for what's missing," using
  * request_meta.intervals[]. The protocol caps that at 8 intervals per request,
- * so fragmented loss may need several rounds to fully patch. */
-#define DTP_MAX_RETRY_ROUNDS     8
+ * so fragmented loss may need several rounds to fully patch.
+ *
+ * SATDEPLOY_NAIVE_BASELINE is the F3.b thesis-experiment build: caps retries
+ * to 0 so the very first dtp_start_transfer is the only attempt. Combined with
+ * the resume gates further down, this models a non-DTP single-shot CSP upload
+ * — the comparison curve the F3 chart needs. */
+#ifdef SATDEPLOY_NAIVE_BASELINE
+#  define DTP_MAX_RETRY_ROUNDS   0
+#else
+#  define DTP_MAX_RETRY_ROUNDS   8
+#endif
 
 /* Context for file download */
 typedef struct {
@@ -191,6 +201,10 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
                             session_state_path(app_name, state_path, sizeof(state_path)) == 0);
 
     bool resumed = false;
+#ifndef SATDEPLOY_NAIVE_BASELINE
+    /* F3.b naive baseline skips the sidecar entirely — no cross-pass resume,
+     * every push starts at byte 0. Leaving this loop in would let the naive
+     * curve "cheat" via state from a prior trial. */
     if (have_state_path) {
         if (session_state_load(state_path, expected_size, expected_hash,
                                nof_packets, eff_mtu,
@@ -198,6 +212,7 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
             resumed = true;
         }
     }
+#endif
 
     /* Open destination file. On resume we must NOT truncate — the previously
      * received packet payloads at their byte offsets are the whole reason we
@@ -379,6 +394,7 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
      *     so the next pass for the same (app, hash) picks up the gaps. We
      *     deliberately persist on hard_error too: a UHF link drop mid-pass
      *     is the canonical case this whole feature exists for. */
+#ifndef SATDEPLOY_NAIVE_BASELINE
     if (have_state_path && ctx.error == 0) {
         if (fully_received) {
             session_state_unlink(state_path);
@@ -393,6 +409,14 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
             }
         }
     }
+#else
+    /* F3.b naive baseline: never persist sidecars. A failed naive trial
+     * must NOT leave breadcrumbs that help the next trial — that would
+     * smuggle satdeploy's resume back in and contaminate the comparison. */
+    if (have_state_path) {
+        session_state_unlink(state_path);
+    }
+#endif
 
     free(ctx.recv_bitmap);
 
@@ -405,8 +429,13 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         return -1;
     }
     if (!fully_received) {
+#ifdef SATDEPLOY_NAIVE_BASELINE
+        printf("\033[31m[dtp]    error: incomplete after %d retry round(s) (%u/%u packets) — naive baseline, no resume\033[0m\n",
+               round, got, ctx.nof_packets);
+#else
         printf("\033[31m[dtp]    error: incomplete after %d retry round(s) (%u/%u packets) — state saved for resume\033[0m\n",
                round, got, ctx.nof_packets);
+#endif
         return -1;
     }
 

@@ -1,189 +1,167 @@
 # Wiring the loss filter into the agent
 
-This is a patch-style guide showing exactly what changes to make in the agent build + source to enable the `loss_filter` test scaffolding. Apply when you're ready to start running the trace-driven F3/F4/F5 experiments.
+This document describes how the trace-driven loss filter is wired into the
+agent. Apply when running F3/F4/F5 thesis experiments. The filter is
+**compile-time gated** by `-Dtest_loss_filter=true`. Flight builds get zero
+overhead and zero footprint — the symbol does not exist in the binary.
 
-The filter is **compile-time gated** — the entire body of `loss_filter.c` and the per-call-site checks live behind `#ifdef SATDEPLOY_TEST_LOSS_FILTER`. Without that macro, the compiler emits zero filter code; flight builds are unaffected.
+## Architecture: one hook, all packets
 
-## 1. `meson.build` change
-
-Add a meson option, conditional source, and conditional compile flag.
-
-```meson
-# satdeploy-agent/meson.build
-
-# Add to default_options or as a separate option (cleaner):
-option_test_loss_filter = get_option('test_loss_filter')
-
-sources = files(
-    'src/main.c',
-    'src/deploy_handler.c',
-    'src/backup_manager.c',
-    'src/app_metadata.c',
-    'src/dtp_client.c',
-    'src/session_state.c',
-    'src/sha256.c',
-    'src/dtp_log_quiet.c',
-    'proto/deploy.pb-c.c',
-)
-
-if option_test_loss_filter
-    sources += files('src/loss_filter.c')
-endif
-
-# ... rest unchanged ...
-
-c_args_extra = []
-if option_test_loss_filter
-    c_args_extra += '-DSATDEPLOY_TEST_LOSS_FILTER'
-endif
-
-satdeploy_agent = executable(
-    ...
-    c_args: [
-        '-Os', '-Wall', '-Wextra',
-        '-ffunction-sections', '-fdata-sections',
-        '-fvisibility=hidden',
-        '-fno-asynchronous-unwind-tables', '-fno-unwind-tables',
-    ] + c_args_extra,
-    ...
-)
+```
+                  ground (drun ping, csh, satdeploy push)
+                                  |
+                                  v
+                        +---------+----------+
+                        |  libcsp router     |
+                        |  csp_qfifo_write() |   <-- single chokepoint
+                        +---------+----------+
+                                  |
+              +-------------------+--------------------+
+              | (TEST BUILDS ONLY: linker wraps it)    |
+              v                                        v
+   __wrap_csp_qfifo_write                  __real_csp_qfifo_write
+     |                                            (the original)
+     | should_drop()? -> free & return
+     | apply_latency() -> sleep
+     | then call __real_csp_qfifo_write
+     v
+   deploy_handler        libdtp recv        libparam pull       csh commands
+   (port 20)             (ports 7,8)        (libparam)          (any port)
 ```
 
-And add a `meson_options.txt`:
+Every CSP packet — from any interface (ZMQ, CAN, KISS, ETH, I2C, UDP, loopback)
+— flows through libcsp's `csp_qfifo_write` before reaching any application
+subsystem. By wrapping that single function at link time, the filter sees
+every packet exactly once, regardless of which subsystem owns the connection.
 
-```meson
-# satdeploy-agent/meson_options.txt
-option('test_loss_filter', type: 'boolean', value: false,
-       description: 'Compile in the trace-driven CSP packet drop hook for thesis experiments. NEVER enable for flight builds.')
+This was previously done with per-call-site hooks (in `deploy_handler.c` and
+inside libdtp's recv loop). Those are no longer needed and are **not used**
+in the current architecture — both would double-filter the same packet
+against the iface-level hook.
+
+## How it's wired
+
+### 1. `src/loss_filter_iface_hook.c`
+
+Provides `__wrap_csp_qfifo_write`. Compiled only when
+`-Dtest_loss_filter=true`. Calls `loss_filter_should_drop()` /
+`loss_filter_apply_latency()`, then forwards to `__real_csp_qfifo_write`
+on the keep path.
+
+### 2. `meson.build`
+
+When `-Dtest_loss_filter=true`:
+- Adds `src/loss_filter.c` and `src/loss_filter_iface_hook.c` to the agent
+  source list.
+- Adds `-DSATDEPLOY_TEST_LOSS_FILTER` to the agent's compile args (NOT
+  global — libdtp must build byte-identical to upstream).
+- Adds `-Wl,--wrap=csp_qfifo_write` to the agent's link args. The GNU/LLVM
+  linker rewrites every call to `csp_qfifo_write` to hit our wrapper, and
+  exposes the original as `__real_csp_qfifo_write` for the wrapper to call.
+
+### 3. `src/main.c`
+
+Calls `loss_filter_init()` near the top of main(), BEFORE `csp_init()`,
+and registers `loss_filter_close` with atexit():
+
+```c
+#include "loss_filter.h"
+
+int main(int argc, char **argv) {
+    ...
+    if (loss_filter_init() != 0) {
+        fprintf(stderr, "loss_filter: pattern file failed to load\n");
+        return 1;
+    }
+    atexit(loss_filter_close);
+    ...
+    csp_init(...);
+    ...
+}
 ```
 
-Build the test variant:
+The init reads `$LOSS_PATTERN_FILE`. If unset, the filter is enabled but
+no-op (no events to apply) and every packet passes through unchanged.
+If set, the file is parsed at startup and parse errors fail the agent
+fast (init returns -1).
+
+## What you get
+
+| Subsystem             | Filtered? |
+|-----------------------|-----------|
+| Deploy command (port 20)         | yes  |
+| DTP data + meta (libdtp recv)    | yes  |
+| libparam pull / push             | yes  |
+| Loopback packets between threads | yes  |
+| Anything that goes through libcsp's router | yes |
+
+The same drop/latency policy applies to every packet — same pattern file,
+same statistics counters in `loss_filter_stats()`.
+
+## Build commands
 
 ```bash
 cd satdeploy-agent
-meson setup build-native --wipe -Dtest_loss_filter=true
-ninja -C build-native
+
+# Test variant (loss filter compiled in, router-level hook active):
+meson setup build-loss --wipe -Dtest_loss_filter=true
+ninja -C build-loss
+
+# Flight variant (default — zero filter code, libcsp linked normally):
+meson setup build-flight --wipe
+ninja -C build-flight
 ```
 
-## 2. `main.c` — initialize and tear down
+Verify the wrap is wired:
+```bash
+nm build-loss/satdeploy-agent | grep csp_qfifo_write
+# Should show __wrap_csp_qfifo_write defined and __real_csp_qfifo_write referenced.
 
-Add near the top of main(), BEFORE `csp_init()`:
-
-```c
-#include "loss_filter.h"
-
-// ... in main() ...
-if (loss_filter_init() != 0) {
-    fprintf(stderr, "loss_filter: pattern file failed to load — refusing to start\n");
-    return 1;
-}
-atexit(loss_filter_close);
+nm build-flight/satdeploy-agent | grep csp_qfifo_write
+# Should show only csp_qfifo_write — no wrap symbols.
 ```
 
-The filter's wall clock starts ticking from `loss_filter_init()`, so this should be one of the first things main does. Refusing to start on a broken pattern file is intentional — silent fallback would invalidate the experiment.
-
-## 3. `deploy_handler.c` — drop control packets
-
-```diff
-+#include "loss_filter.h"
-+
- static void handle_connection(csp_conn_t *conn) {
-     csp_packet_t *packet = csp_read(conn, 10000);
-+    if (packet && loss_filter_should_drop()) {
-+        csp_buffer_free(packet);
-+        packet = NULL;
-+    }
-     if (packet == NULL) {
-         printf("[deploy] error: no data received\n");
-         fflush(stdout);
-         return;
-     }
-```
-
-This drops control-channel packets (port 20). At low loss rates this is rare; at high loss rates the deploy command itself can fail, which is realistic — the F3 chart should show this effect.
-
-## 4. `dtp_client.c` — drop data packets
-
-DTP runs its own internal loop, so hooking is more invasive. Two approaches; pick based on what libdtp exposes:
-
-### Approach A — libdtp on_data hook (preferred)
-
-`dtp_client.c` already calls `dtp_session_set_user_ctx`. If libdtp exposes an "on packet received" callback that can return "drop me," wire it:
-
-```c
-#include "loss_filter.h"
-
-// In your on_data callback, before processing:
-static int on_data_received(dtp_session_t *session, csp_packet_t *packet) {
-    if (loss_filter_should_drop()) {
-        csp_buffer_free(packet);
-        return DTP_DROP;  // or whatever libdtp's "discard this packet" return is
-    }
-    // ... normal processing ...
-}
-```
-
-Check libdtp's API — if `dtp_session_set_on_packet_recv` exists or similar, that's the hook.
-
-### Approach B — wrap the CSP interface (fallback)
-
-If libdtp doesn't have a usable RX hook, drop at the CSP interface layer. This requires implementing a "lossy wrapper" iface that forwards to a real iface but drops per the filter:
-
-```c
-// satdeploy-agent/src/lossy_iface.c
-csp_iface_t lossy_iface;
-static csp_iface_t *underlying;
-
-static int lossy_nexthop(csp_iface_t *iface, uint16_t via,
-                         csp_packet_t *packet, int from_me) {
-    // For *outgoing* (TX), pass through.
-    if (from_me) {
-        return underlying->nexthop(underlying, via, packet, from_me);
-    }
-    // For *incoming* — actually nexthop is TX. RX drop needs a different hook.
-    // ...
-}
-```
-
-The clean RX-drop point in libcsp is harder. If approach A works, prefer it strongly.
-
-## 5. Verify the wiring
-
-A 60-second smoke test once you've built `-Dtest_loss_filter=true`:
+## Running an experiment
 
 ```bash
-# Generate a test pattern that drops 100% of packets after t=2s
-cat > /tmp/test_pattern.pattern <<EOF
-0.000 up
-2.000 down
-EOF
+# Pick a pattern file derived from real bird logs:
+PATTERN=experiments/results/bird-patterns-window/2026-04-22T135020+0000-csh.window.pattern
 
-# Run the agent with the filter on
-LOSS_PATTERN_FILE=/tmp/test_pattern.pattern \
-    ./satdeploy-agent/build-native/satdeploy-agent -i ZMQ -p localhost -a 5425 &
-
-# Push a small file. First 2s should work; after that all packets dropped.
-csh -i init/zmq.csh "satdeploy push hello -n 5425"
+LOSS_PATTERN_FILE=$PATTERN \
+LOSS_PATTERN_SEED=42 \
+  ./build-loss/satdeploy-agent --zmq-endpoint tcp://localhost:9600 ...
 ```
 
-Expected behavior: push starts normally, then completely fails after 2 seconds. Agent log should show:
-
+Output at shutdown:
 ```
-[loss_filter] loaded 2 events from /tmp/test_pattern.pattern
-...
-[loss_filter] final stats: dropped X of Y packets (Z%)
+[loss_filter] loaded 27 events from .../*.window.pattern
+[loss_filter] final stats: dropped 38 of 412 packets (9.22%)
 ```
 
-If you see this, the filter is wired correctly and you can start running F3/F4/F5 experiments.
+## Tests
 
-## 6. Operational reminder
+Regression coverage lives in `experiments/test_loss_filter_actions.sh`
+(10 cases) and `experiments/lib/test_parse_pass_log.py` (16 cases). Run
+both before touching anything in `src/loss_filter*.c` or
+`experiments/lib/parse_pass_log.py`.
 
-**The flight build must NEVER include this.** Belt-and-braces:
+## Why not per-call-site hooks (the previous approach)
 
-- Yocto recipes for the satellite build should not pass `-Dtest_loss_filter=true`.
-- CI or pre-flight check: confirm the flight binary has no `loss_filter` symbols.
-  ```bash
-  nm satdeploy-agent | grep -i loss_filter
-  # Should print nothing.
-  ```
-- Code review checklist: any change to `loss_filter.c` requires confirmation that flight builds are unaffected. The file should be small enough that this stays easy to verify.
+The earlier design had `loss_filter_should_drop()` checks inside each
+subsystem's read path: one in `deploy_handler.c`, one patched into
+`lib/dtp/src/dtp_client.c`. Two reasons that approach was retired:
+
+1. **Coverage gaps.** Anything that ran outside those two call sites
+   (libparam pulls, csh commands, RDP control packets) was invisible to
+   the filter. F3.b sweeps showed clean transfers regardless of pattern
+   content for non-DTP traffic.
+2. **Compounded probabilities.** A packet that traveled through libdtp's
+   queue and into the application would get filtered at both sites,
+   giving an effective drop rate of `1 - (1-p)^2 ≈ 2p` for small `p`.
+   Statistically wrong.
+
+The router-level wrap fixes both. `lib/dtp` is no longer patched and
+builds byte-identical to upstream — its `#ifdef SATDEPLOY_TEST_LOSS_FILTER`
+block is dormant code that the agent's build never activates (the macro
+is set only for the agent's own translation units, not the libdtp
+subproject).

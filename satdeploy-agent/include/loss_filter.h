@@ -76,6 +76,20 @@ int loss_filter_init(void);
 bool loss_filter_should_drop(void);
 
 /*
+ * Apply the currently-configured per-packet latency by sleeping the calling
+ * thread for the active delay (set by `latency <ms>` events in the pattern
+ * file). No-op when no latency has been set, or when the filter is disabled.
+ *
+ * Intended call site: AFTER `loss_filter_should_drop()` returns false, so
+ * delivered packets see the same RTT floor as the real radio link
+ * (~1265 ms for DISCO-2 UHF). Dropped packets do not delay — they vanish.
+ *
+ * Safe to call from CSP router threads; the sleep happens outside the
+ * filter's internal mutex so concurrent threads do not block on each other.
+ */
+void loss_filter_apply_latency(void);
+
+/*
  * Free pattern memory. Called from main() at shutdown. Safe to call
  * before init() (no-op).
  */
@@ -91,9 +105,10 @@ void loss_filter_stats(uint32_t *out_packets_seen,
 #else  /* !SATDEPLOY_TEST_LOSS_FILTER */
 
 /* Stubs for flight builds. Compiler eliminates the calls entirely. */
-static inline int  loss_filter_init(void)        { return 0; }
-static inline bool loss_filter_should_drop(void) { return false; }
-static inline void loss_filter_close(void)       { }
+static inline int  loss_filter_init(void)          { return 0; }
+static inline bool loss_filter_should_drop(void)   { return false; }
+static inline void loss_filter_apply_latency(void) { }
+static inline void loss_filter_close(void)         { }
 static inline void loss_filter_stats(uint32_t *p, uint32_t *d) {
     if (p) *p = 0;
     if (d) *d = 0;

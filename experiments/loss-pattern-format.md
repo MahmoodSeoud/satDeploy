@@ -32,17 +32,23 @@ A simple line-oriented format meets all three. We don't need binary efficiency �
 |---|---|
 | `up` | Link comes up. From this point forward, packets pass through. (Default state at t=0 is `up`.) |
 | `down` | Link goes down. From this point forward, every CSP packet is dropped, until the next `up`. |
-| `prob <p>` | From this point, drop each packet independently with probability `p` (0.0–1.0). Used for non-deterministic patterns derived from aggregate stats. |
-| `clear` | Reset to the initial `up` state — clears any lingering `prob`. |
+| `prob <p>` | From this point, drop each packet independently with probability `p` (0.0–1.0). IID Bernoulli — not realistic for RF but useful for sanity tests. |
+| `clear` | Reset to the initial `up` state — clears any lingering `prob` or `gilbert`. |
+| `latency <ms>` | Sleep `ms` ms before delivering each non-dropped packet. Orthogonal to drop actions and persists across `up` / `down` / `prob` / `gilbert` until another `latency` event (use `latency 0` to disable). Models the real radio's RTT floor — DISCO-2 UHF measured at ~1265 ms median for a 0-byte ping. |
+| `gilbert <p_GG> <p_BB> <drop_G> <drop_B>` | Switch to a two-state Markov burst-loss model. Good state drops at `drop_G`; Bad state drops at `drop_B`. After each packet, stay in Good with probability `p_GG`, else flip to Bad (symmetric for `p_BB`). Cancelled by any subsequent `up` / `down` / `clear` / `prob`. Use this when real-link loss is bursty (RF fades) rather than independent per packet. |
 
-Most pattern files use only `up` / `down`. The `prob` action exists for cases where the lab's logs only give us aggregate frame-loss percentages over windows, not per-packet outcomes. We can mix-and-match within one file:
+`up` / `down` are most faithful when you have per-packet outcome data (e.g. derived from `drun ping` sequences in DISCO-2 bird logs via `experiments/lib/parse_pass_log.py`). `prob` is appropriate only when you have aggregate frame-loss stats over windows. `gilbert` is the right model when you know mean loss rate but want bursty distribution. Mix-and-match within one file:
 
 ```
-0.000   up
-12.500  down       # lock loss starts
-13.200  up         # lock recovered
-30.000  prob 0.05  # marginal SNR window — 5% per-packet loss
-60.000  clear      # back to clean
+0.000    latency 1265        # real link RTT floor
+0.000    up
+12.500   down                # lock loss starts
+13.200   up                  # lock recovered
+30.000   gilbert 0.95 0.6 0.05 0.95
+                             # marginal-SNR window with bursts:
+                             #   Good state (95% steady, 5% drop)
+                             #   Bad state  (60% steady, 95% drop)
+60.000   clear               # back to clean (latency persists)
 ```
 
 ### Beyond the last entry

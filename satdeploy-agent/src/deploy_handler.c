@@ -87,6 +87,11 @@ static csp_socket_t deploy_socket = {0};
  * Handle a single deploy connection.
  */
 static void handle_connection(csp_conn_t *conn) {
+    /* The loss filter intercepts at the libcsp router level
+     * (__wrap_csp_qfifo_write in src/loss_filter_iface_hook.c) when test
+     * builds are enabled, so by the time the packet reaches here it has
+     * already passed the drop + latency stages. No per-call-site hook
+     * needed — see include/loss_filter.integration.md. */
     csp_packet_t *packet = csp_read(conn, 10000);
     if (packet == NULL) {
         printf("[deploy] error: no data received\n");

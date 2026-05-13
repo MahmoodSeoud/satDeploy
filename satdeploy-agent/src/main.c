@@ -22,6 +22,7 @@
 
 #include "satdeploy_agent.h"
 #include "version.h"
+#include "loss_filter.h"
 
 #define DEFAULT_NODE_ADDR 5425
 #define DEFAULT_INTERFACE "ZMQ"
@@ -218,6 +219,14 @@ int main(int argc, char *argv[]) {
     /* Setup signal handler */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+
+    /* Test-only: load CSP packet drop pattern. Wall clock starts here, so it
+     * must run before any CSP traffic flows. Stub no-ops in flight builds. */
+    if (loss_filter_init() != 0) {
+        fprintf(stderr, "loss_filter: pattern file failed to load — refusing to start\n");
+        return 1;
+    }
+    atexit(loss_filter_close);
 
     /* Initialize CSP */
     csp_conf.hostname = "satdeploy-agent";
