@@ -34,13 +34,13 @@ A simple line-oriented format meets all three. We don't need binary efficiency �
 | `down` | Link goes down. From this point forward, every CSP packet is dropped, until the next `up`. |
 | `prob <p>` | From this point, drop each packet independently with probability `p` (0.0–1.0). IID Bernoulli — not realistic for RF but useful for sanity tests. |
 | `clear` | Reset to the initial `up` state — clears any lingering `prob` or `gilbert`. |
-| `latency <ms>` | Sleep `ms` ms before delivering each non-dropped packet. Orthogonal to drop actions and persists across `up` / `down` / `prob` / `gilbert` until another `latency` event (use `latency 0` to disable). Models the real radio's RTT floor — DISCO-2 UHF measured at ~1265 ms median for a 0-byte ping. |
+| `latency <ms>` | Sleep `ms` ms before delivering each non-dropped packet. Orthogonal to drop actions and persists across `up` / `down` / `prob` / `gilbert` until another `latency` event (use `latency 0` to disable). Models the real radio's RTT floor — DISCO-2 UHF measured at ~1268 ms median for a 0-byte ping (n=218 non-loopback pings across 82 in-window passes; see `experiments/results/burstiness_analysis.md` for the source set). |
 | `gilbert <p_GG> <p_BB> <drop_G> <drop_B>` | Switch to a two-state Markov burst-loss model. Good state drops at `drop_G`; Bad state drops at `drop_B`. After each packet, stay in Good with probability `p_GG`, else flip to Bad (symmetric for `p_BB`). Cancelled by any subsequent `up` / `down` / `clear` / `prob`. Reserve this for high-loss links or scenarios where bursts dominate; see `experiments/results/burstiness_analysis.md` for when it's actually needed. |
 
 `up` / `down` are most faithful when you have per-packet outcome data (e.g. derived from `drun ping` sequences in DISCO-2 bird logs via `experiments/lib/parse_pass_log.py`). `prob` is appropriate when you have aggregate frame-loss stats over windows AND the loss pattern is roughly IID — which is the typical case for DISCO-2 in-window traffic (85% of passes fit Bernoulli per the stress-test analysis). `gilbert` is the right model when you know mean loss rate but the in-window pattern is verifiably bursty (about 9% of DISCO-2 passes per the same analysis). Mix-and-match within one file:
 
 ```
-0.000    latency 1265        # real link RTT floor
+0.000    latency 1268        # real link RTT floor (DISCO-2 UHF median)
 0.000    up
 12.500   down                # lock loss starts
 13.200   up                  # lock recovered

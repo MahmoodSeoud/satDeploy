@@ -82,7 +82,7 @@ bool loss_filter_should_drop(void);
  *
  * Intended call site: AFTER `loss_filter_should_drop()` returns false, so
  * delivered packets see the same RTT floor as the real radio link
- * (~1265 ms for DISCO-2 UHF). Dropped packets do not delay — they vanish.
+ * (~1268 ms for DISCO-2 UHF). Dropped packets do not delay — they vanish.
  *
  * Safe to call from CSP router threads; the sleep happens outside the
  * filter's internal mutex so concurrent threads do not block on each other.
