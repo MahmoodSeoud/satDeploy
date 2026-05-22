@@ -28,9 +28,11 @@ sources = files(
 	'src/deploy_handler.c',
 	'src/backup_manager.c',
 	'src/app_metadata.c',
-	'src/dtp_client.c',
-	'src/session_state.c',
-	'src/sha256.c',
+	# DTP client logic, session-state sidecar, and SHA256 now live in
+	# libsatpush (../libsatpush). See libsatpush_sources below for the
+	# inline-compilation glue. Pre-extract files src/dtp_client.c,
+	# src/session_state.c, src/sha256.c are retained on disk for revert
+	# safety during the v0.1 extract; they are not in the build.
 	# Same trick as the APM: providing dbg_log_impl/dbg_warn_impl ourselves
 	# stops libdtp's dtp_log.o from leaking [LOG]/[WARN] into operator output
 	# during a deploy. SATDEPLOY_DTP_VERBOSE=1 turns it back on for debugging.
@@ -93,6 +95,24 @@ if naive_baseline
 	naive_baseline_args += '-DSATDEPLOY_NAIVE_BASELINE'
 endif
 
+# libsatpush sources compiled directly into the agent binary. The library
+# exists as a sibling directory at ../libsatpush with its own meson.build
+# for standalone consumption (Step 4 of the extract per /plan-eng-review
+# 2026-05-21 wires the agent to consume libsatpush inline rather than via
+# meson subproject() — the subproject pattern requires libsatpush to live
+# under satdeploy-agent/lib/, which it doesn't because libsatpush is
+# repo-shared with the APM). Inline compilation reuses the agent's existing
+# csp_dep / dtp_client_dep resolution and keeps the build green.
+libsatpush_root = '../libsatpush'
+libsatpush_sources = files(
+	libsatpush_root + '/src/satpush_version.c',
+	libsatpush_root + '/src/satpush_ctx.c',
+	libsatpush_root + '/src/satpush_pull.c',
+	libsatpush_root + '/src/satpush_serve.c',
+	libsatpush_root + '/src/session_state.c',
+	libsatpush_root + '/src/sha256.c',
+)
+
 # version.h is regenerated whenever meson reconfigures, so the embedded git rev
 # reflects the source tree at setup time. Run `meson setup --reconfigure` after
 # committing to refresh it before building a release artifact.
@@ -111,6 +131,13 @@ version_h = configure_file(
 dirs = include_directories(
 	'include',
 	'proto',
+	libsatpush_root + '/include',
+	# libsatpush internal headers (sha256.h, session_state_internal.h,
+	# satpush_internal.h) are referenced by the libsatpush_sources we
+	# compile inline. Adopters consuming libsatpush as a real subproject
+	# would not need this; here we are compiling its translation units in
+	# situ and the compiler needs to find their #includes.
+	libsatpush_root + '/src',
 )
 
 csp_dep = dependency('csp', fallback: ['csp', 'csp_dep'])
@@ -125,6 +152,7 @@ deps = [csp_dep, param_dep, dtp_client_dep, proto_c_dep, m_dep, pthread_dep]
 satdeploy_agent = executable(
 	'satdeploy-agent',
 	sources,
+	libsatpush_sources,
 	version_h,
 	include_directories: dirs,
 	dependencies: deps,

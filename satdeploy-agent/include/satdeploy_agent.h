@@ -121,32 +121,10 @@ typedef void (*backup_list_callback)(const char *version, const char *timestamp,
                                      void *user_data);
 int backup_list(const char *app_name, backup_list_callback callback, void *user_data);
 
-/**
- * Download a file via DTP protocol with cross-pass resume.
- *
- * If a state sidecar exists for this (app_name, expected_hash) and validates
- * (size + nof_packets + effective_mtu all match), the receive bitmap is
- * preloaded from disk and only the still-missing intervals are re-requested.
- * On full success the sidecar is unlinked. On partial completion (retry
- * rounds exhausted but no hard error), the bitmap is persisted so the next
- * pass picks up where this one left off — survives Ctrl-C, agent reboot,
- * and pass-window boundaries.
- *
- * @param server_node    DTP server CSP node address.
- * @param payload_id     DTP payload identifier.
- * @param dest_path      Local path to save the downloaded file (also the temp).
- * @param expected_size  Expected file size (0 to skip size check / resume).
- * @param expected_hash  Full 64-hex SHA256 (gates resume; must match sidecar).
- * @param app_name       App identifier — picks the sidecar file under SESSION_STATE_DIR.
- * @param mtu            Max transmission unit (0 = use default 1024).
- * @param throughput     Target throughput in bytes/s (0 = use default).
- * @param timeout        Transfer timeout in seconds (0 = use default).
- * @return 0 on success, -1 on failure.
- */
-int dtp_download_file(uint32_t server_node, uint8_t payload_id,
-                      const char *dest_path, uint32_t expected_size,
-                      const char *expected_hash, const char *app_name,
-                      uint16_t mtu, uint32_t throughput, uint8_t timeout);
+/* dtp_download_file moved to libsatpush as satpush_pull_file (see
+ * ../libsatpush/include/satpush/satpush.h). The pre-extract
+ * src/dtp_client.c remains on disk for revert safety but is no longer
+ * built into the agent. */
 
 /**
  * Save app deployment metadata.

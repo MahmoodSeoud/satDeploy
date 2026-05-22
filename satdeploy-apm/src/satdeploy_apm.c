@@ -28,6 +28,9 @@
 #include <dtp/dtp.h>
 #include <dtp/dtp_file_payload.h>
 #include <dtp/dtp_protocol.h>
+
+#include "satpush/satpush.h"
+
 #include "deploy.pb-c.h"
 #include "config.h"
 #include "history.h"
@@ -482,34 +485,24 @@ static int deploy_single_app(unsigned int node, char *app_name,
     printf("  Checksum: %.8s\n", checksum);
     printf("  Target:   node %u\n", node);
 
-    /* Step 1: Register the file as a DTP payload.
+    /* Step 1: Register the file as a DTP payload via libsatpush.
      *
-     * Deterministic FNV-8 of app_name as the payload_id, with del-then-add to
-     * refresh whatever's currently in that slot. This way the agent can map
-     * (app_name → payload_id) without an extra round-trip, and a re-staged
-     * binary correctly overwrites stale registry contents on the same slot.
-     *
-     * dtp_file_payload_del prints 'ERROR: Payload id: X does not exist' to
-     * stdout when the slot is empty (which is the common case on a fresh
-     * push). That looks scary but is expected; suppress it by swapping fd 1
-     * to /dev/null for the duration of the call. */
+     * Deterministic FNV-8 of app_name as the payload_id. libsatpush wraps
+     * dtp_file_payload_del + dtp_file_payload_add with the stdout
+     * suppression trick (libdtp prints "ERROR: Payload id: X does not
+     * exist" on empty slots, the common case on a fresh push) and the
+     * del-then-add refresh semantics so a re-staged binary correctly
+     * overwrites stale registry contents on the same slot. The ctx
+     * argument is NULL because the APM only uses serve operations; see
+     * satpush_serve_register doxygen for the rationale. */
     uint8_t payload_id = payload_id_for_app(app_name);
 
-    fflush(stdout);
-    int saved_stdout = dup(STDOUT_FILENO);
-    int devnull = open("/dev/null", O_WRONLY);
-    if (devnull >= 0) {
-        dup2(devnull, STDOUT_FILENO);
-        close(devnull);
-    }
-    dtp_file_payload_del(payload_id);
-    fflush(stdout);
-    if (saved_stdout >= 0) {
-        dup2(saved_stdout, STDOUT_FILENO);
-        close(saved_stdout);
-    }
-
-    if (!dtp_file_payload_add(payload_id, local_path)) {
+    satpush_serve_opts serve_opts = {
+        .payload_id = payload_id,
+        .local_file = (char *)local_path,
+        .file_size  = file_size,
+    };
+    if (satpush_serve_register(NULL, &serve_opts) != SATPUSH_OK) {
         printf("Error: Failed to register file as DTP payload\n");
         return SLASH_EIO;
     }
@@ -522,7 +515,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
     if (owns_server) {
         if (dtp_server_session_start(&local_server) != 0) {
             printf("Error: Failed to start DTP server thread\n");
-            dtp_file_payload_del(payload_id);
+            satpush_serve_unregister(NULL, payload_id);
             return SLASH_EIO;
         }
     }
@@ -559,7 +552,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
     if (owns_server) {
         dtp_server_session_stop(&local_server);
     }
-    dtp_file_payload_del(payload_id);
+    satpush_serve_unregister(NULL, payload_id);
 
     if (rc < 0) {
         printf("Error: No response from agent (timeout)\n");

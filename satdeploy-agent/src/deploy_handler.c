@@ -19,6 +19,16 @@
 
 #include "satdeploy_agent.h"
 #include "deploy.pb-c.h"
+#include "satpush/satpush.h"
+
+/* libsatpush context. Created once in deploy_handler_init(); used by every
+ * DTP pull triggered from handle_deploy. Lifetime is the agent process. */
+static satpush_ctx_t *g_satpush_ctx = NULL;
+
+/* Legacy state_dir path; matches the hardcoded SESSION_STATE_DIR that the
+ * pre-extract session_state.h used. Preserved on the agent for backward
+ * compatibility with existing sidecars on disk. */
+#define SATDEPLOY_AGENT_STATE_DIR "/var/lib/satdeploy/state"
 
 /* Maximum number of backups to return in list */
 #define MAX_BACKUP_ENTRIES 64
@@ -165,6 +175,22 @@ static void handle_connection(csp_conn_t *conn) {
 
 int deploy_handler_init(void) {
     printf("[deploy] Initializing deploy handler on port %d\n", DEPLOY_PORT);
+
+    /* libsatpush context. local_node is informational only (libsatpush does
+     * not use it for routing); 0 keeps the call self-contained and avoids
+     * threading the agent's node_addr through deploy_handler_init's
+     * signature. The throughput is a per-deploy override-able default;
+     * 10 MB/s preserves legacy behavior on ZMQ loopback. Real RF deploys
+     * pass dtp_throughput per-call which overrides this. */
+    g_satpush_ctx = satpush_create(/*local_node=*/0,
+                                   SATDEPLOY_AGENT_STATE_DIR,
+                                   /*throughput_bps=*/10000000);
+    if (g_satpush_ctx == NULL) {
+        printf("\033[31m[deploy] error: satpush_create failed for state_dir=%s\033[0m\n",
+               SATDEPLOY_AGENT_STATE_DIR);
+        return -1;
+    }
+    printf("[deploy] libsatpush ready (state_dir=%s)\n", SATDEPLOY_AGENT_STATE_DIR);
 
     /* Bind socket to deploy port */
     if (csp_bind(&deploy_socket, DEPLOY_PORT) != CSP_ERR_NONE) {
@@ -758,41 +784,50 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
     char temp_path[MAX_PATH_LEN];
     snprintf(temp_path, sizeof(temp_path), "%s.tmp", req->remote_path);
 
-    if (dtp_download_file(req->dtp_server_node, req->payload_id,
-                          temp_path, req->expected_size,
-                          req->expected_checksum, req->app_name,
-                          req->dtp_mtu, req->dtp_throughput,
-                          req->dtp_timeout) != 0) {
+    /* Pull file via libsatpush. SHA256 verification happens inside
+     * satpush_pull_file when expected_sha256_hex is set, so the previous
+     * post-download verify block (compute_file_checksum + strcmp) is no
+     * longer needed here - the puller returns SATPUSH_HASH_MISMATCH
+     * directly on verify failure. Cross-pass resume is keyed on
+     * (resume_key=app_name, expected_sha256_hex) and managed by libsatpush
+     * via the state_dir set in satpush_create. */
+    satpush_pull_opts pull_opts = {
+        .server_node         = req->dtp_server_node,
+        .payload_id          = req->payload_id,
+        .dest_file           = temp_path,
+        .expected_size       = req->expected_size,
+        .expected_sha256_hex = req->expected_checksum,
+        .resume_key          = req->app_name,
+        .mtu                 = req->dtp_mtu,
+        .throughput_bps      = req->dtp_throughput,
+        .timeout_s           = req->dtp_timeout,
+        /* max_retry_rounds = 0 -> libsatpush default of 8, matches
+         * pre-extract DTP_MAX_RETRY_ROUNDS so F3.b numbers don't shift. */
+    };
+
+    satpush_result pull_rc = satpush_pull_file(g_satpush_ctx, &pull_opts);
+    if (pull_rc == SATPUSH_HASH_MISMATCH) {
         resp->success = 0;
-        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_DTP_DOWNLOAD_FAILED;
-        resp->error_message = "DTP download failed";
-        /* TODO: Restore from backup if we had one */
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
+        resp->error_message = "Checksum mismatch";
+        unlink(temp_path);
         return;
     }
-
-    /* Verify checksum */
-    if (req->expected_checksum != NULL && strlen(req->expected_checksum) > 0) {
-        static char actual_checksum[HASH_BUF_LEN];
-        if (compute_file_checksum(temp_path, actual_checksum, sizeof(actual_checksum)) != 0) {
-            resp->success = 0;
-            resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
-            resp->error_message = "Failed to compute checksum";
-            unlink(temp_path);
-            return;
-        }
-
-        if (strcmp(actual_checksum, req->expected_checksum) != 0) {
-            printf("\033[31m[deploy] checksum mismatch: expected=%.8s actual=%.8s\033[0m\n",
-                   req->expected_checksum, actual_checksum);
-            resp->success = 0;
-            resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
-            resp->error_message = "Checksum mismatch";
-            unlink(temp_path);
-            return;
-        }
-        printf("[deploy] checksum ok: %.8s\n", actual_checksum);
-        fflush(stdout);
+    if (pull_rc != SATPUSH_OK) {
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_DTP_DOWNLOAD_FAILED;
+        resp->error_message = (pull_rc == SATPUSH_PARTIAL)
+            ? "DTP transfer incomplete (state saved for resume on next pass)"
+            : satpush_strerror(pull_rc);
+        /* On PARTIAL the temp file and bitmap survive; the next deploy for
+         * the same (app_name, expected_checksum) picks up from the sidecar.
+         * On HARD_ERROR the temp file may be unusable; leave it for now -
+         * the next attempt will either resume (if state was saved) or
+         * truncate (if it wasn't). */
+        return;
     }
+    printf("[deploy] pull complete and verified for %s\n", req->app_name);
+    fflush(stdout);
 
     /* Install file (move temp to final location) */
     if (rename(temp_path, req->remote_path) != 0) {

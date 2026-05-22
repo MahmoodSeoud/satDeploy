@@ -15,6 +15,18 @@ project('satdeploy-apm', 'c', subproject_dir: 'lib', version: '0.4.0', default_o
 
 includes = include_directories('src')
 
+# libsatpush public API. The APM only consumes the serve side
+# (satpush_serve_register / satpush_serve_unregister); it does not pull files.
+# Per Step 4b of /plan-eng-review 2026-05-21, the APM keeps its own SHA256
+# implementation because libsatpush's sha256.h has an incompatible struct
+# layout, so only satpush_serve.c is compiled in. The APM passes NULL for
+# the ctx argument (allowed for serve-only callers - see satpush.h).
+libsatpush_root = '../libsatpush'
+libsatpush_serve_sources = files(
+  libsatpush_root + '/src/satpush_serve.c',
+)
+libsatpush_inc = include_directories(libsatpush_root + '/include')
+
 # version.h is regenerated whenever meson reconfigures, so the embedded git rev
 # reflects the source tree at setup time. Run `meson setup --reconfigure` after
 # committing to refresh it before building a release artifact.
@@ -63,8 +75,9 @@ satdeploy_apm = shared_library(
       # SATDEPLOY_DTP_VERBOSE escape hatch.
       'src/dtp_log_quiet.c',
       version_h,
+      libsatpush_serve_sources,
     ],
-    include_directories: [includes],
+    include_directories: [includes, libsatpush_inc],
     dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, sqlite3_dep, dtp_server_dep],
     link_args: ['-lm'],
     install: true
