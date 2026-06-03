@@ -1,0 +1,10 @@
+# Build options for satdeploy-agent.
+#
+# Both are test/experiment toggles, OFF by default so flight builds are
+# clean and zero-overhead. meson.build reads them via get_option().
+
+option('test_loss_filter', type: 'boolean', value: false,
+  description: 'Build the test-only loss_filter scaffolding for thesis trace-driven experiments (links --wrap=csp_qfifo_write). Off for flight builds. Requires -Db_lto=false when enabled.')
+
+option('naive_baseline', type: 'boolean', value: false,
+  description: 'Disable the agent retry/resume scaffolding to reproduce the F3.b naive baseline (DTP_MAX_RETRY_ROUNDS=0). For experiments only.')
