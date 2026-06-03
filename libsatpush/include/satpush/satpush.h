@@ -95,6 +95,12 @@ typedef struct {
     uint32_t    throughput_bps;       /**< 0 -> ctx default                    */
     uint8_t     timeout_s;            /**< 0 -> 60                             */
     uint8_t     max_retry_rounds;     /**< 0 -> 8                              */
+    uint8_t     single_pass;          /**< non-zero: exactly one transfer
+                                           attempt, no gap-filling retry rounds
+                                           (overrides max_retry_rounds). For the
+                                           F3.b naive baseline; pair with
+                                           resume_key=NULL to fully disable
+                                           cross-pass resume.                  */
 
     satpush_progress_cb on_progress;  /**< NULL = no callback                  */
     void*       user_ctx;             /**< Passed to on_progress.              */

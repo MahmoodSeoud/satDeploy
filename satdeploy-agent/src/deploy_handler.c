@@ -797,7 +797,16 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         .dest_file           = temp_path,
         .expected_size       = req->expected_size,
         .expected_sha256_hex = req->expected_checksum,
+#ifdef SATDEPLOY_NAIVE_BASELINE
+        /* F3.b naive baseline (-Dnaive_baseline=true): single-shot, no retry
+         * rounds and no cross-pass resume, so each push starts at byte 0 and a
+         * tail gap is fatal. resume_key=NULL disables sidecar load+save;
+         * single_pass disables the retry loop. Models a non-DTP CSP upload. */
+        .resume_key          = NULL,
+        .single_pass         = 1,
+#else
         .resume_key          = req->app_name,
+#endif
         .mtu                 = req->dtp_mtu,
         .throughput_bps      = req->dtp_throughput,
         .timeout_s           = req->dtp_timeout,

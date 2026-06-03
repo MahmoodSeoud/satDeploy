@@ -189,6 +189,7 @@ static satpush_result satpush_pull_file_impl(const char *state_dir,
                                              uint32_t throughput,
                                              uint8_t timeout,
                                              uint8_t max_retry_rounds,
+                                             int single_pass,
                                              satpush_progress_cb on_progress,
                                              void *progress_user_ctx) {
     if (dest_path == NULL) {
@@ -199,7 +200,15 @@ static satpush_result satpush_pull_file_impl(const char *state_dir,
     if (mtu == 0)               mtu = SATPUSH_DEFAULT_MTU;
     if (throughput == 0)        throughput = SATPUSH_DEFAULT_THROUGHPUT;
     if (timeout == 0)           timeout = SATPUSH_DEFAULT_TIMEOUT_S;
-    if (max_retry_rounds == 0)  max_retry_rounds = SATPUSH_DEFAULT_MAX_ROUNDS;
+    if (single_pass) {
+        /* Naive baseline (F3.b): the first dtp_start_transfer is the only
+         * attempt, no gap-filling retry rounds. Overrides max_retry_rounds.
+         * Resume is disabled separately by the caller passing resume_key=NULL,
+         * so a naive trial can neither load nor save a sidecar. */
+        max_retry_rounds = 0;
+    } else if (max_retry_rounds == 0) {
+        max_retry_rounds = SATPUSH_DEFAULT_MAX_ROUNDS;
+    }
 
     /* Effective payload per packet is (mtu - 8) - DTP prepends two 32-bit
      * words (sequence + offset) to the CSP packet payload. */
@@ -499,6 +508,7 @@ satpush_result satpush_pull_file(satpush_ctx_t *ctx,
         throughput,
         opts->timeout_s,
         opts->max_retry_rounds,
+        opts->single_pass,
         opts->on_progress,
         opts->user_ctx);
 }
