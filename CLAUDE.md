@@ -82,7 +82,8 @@ Ground station csh module providing:
 ### Cross-pass DTP resume
 
 Within-pass reliability is the libdtp selective-repeat retry loop in
-`satdeploy-agent/src/dtp_client.c` (commit 5fbe1b1) — bitmap of received
+`libsatpush/src/satpush_pull.c` (extracted from the agent's dtp_client.c at
+commit 5fbe1b1) — bitmap of received
 seqs, scan for gaps, re-issue the request with `request_meta.intervals[]`,
 up to 8 retry rounds.
 
@@ -140,7 +141,7 @@ first `dtp_start_transfer` only asks for the still-missing seqs.
 
 Strict equality on the sidecar header gates resume — a re-staged binary
 (different SHA256) blows away stale state instead of inheriting a poisoned
-bitmap. See `satdeploy-agent/include/session_state.h` for the on-disk
+bitmap. See `libsatpush/src/session_state_internal.h` for the on-disk
 format and design rationale.
 
 ## CLI Commands
@@ -228,7 +229,7 @@ Files are named: `{YYYYMMDD}-{HHMMSS}-{hash}.bak` where `hash` is the full 64-he
 ### Session State Sidecar
 - Path: `/var/lib/satdeploy/state/<app_name>.dtpstate`
 - Mode: 0600
-- Format: see `satdeploy-agent/include/session_state.h` (uint32 version + uint32 size + char[65] hash + uint32 nof_packets + uint16 effective_mtu + uint16 reserved + uint8[bitmap_bytes])
+- Format: see `libsatpush/src/session_state_internal.h` (uint32 version + uint32 size + char[65] hash + uint32 nof_packets + uint16 effective_mtu + uint16 reserved + uint8[bitmap_bytes])
 
 ## Skill routing
 

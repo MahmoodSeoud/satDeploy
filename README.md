@@ -96,7 +96,7 @@ CubeSat operators upload software to satellites over UHF radio links that are fl
 
 satDeploy persists the receive bitmap to a sidecar at `/var/lib/satdeploy/state/<app>.dtpstate` whenever a pass ends partial. The next deploy for the same `(app, hash)` pre-patches the DTP request to ask only for the still-missing intervals. A re-staged binary (different SHA256) invalidates the sidecar via strict-equality content addressing, so a partial transfer can never silently inherit a stale bitmap.
 
-The state lives on persistent flash, so it survives a full agent reboot or OBC power cycle. Operators can power down between passes (for power budget, thermal, or mission scheduling) without losing the megabytes already shipped. See [`satdeploy-agent/include/session_state.h`](satdeploy-agent/include/session_state.h) for the on-disk format and design rationale.
+The state lives on persistent flash, so it survives a full agent reboot or OBC power cycle. Operators can power down between passes (for power budget, thermal, or mission scheduling) without losing the megabytes already shipped. See [`libsatpush/src/session_state_internal.h`](libsatpush/src/session_state_internal.h) for the on-disk format and design rationale.
 
 ## Measured
 
