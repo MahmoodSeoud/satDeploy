@@ -816,9 +816,13 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
     if (pull_rc != SATPUSH_OK) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_DTP_DOWNLOAD_FAILED;
-        resp->error_message = (pull_rc == SATPUSH_PARTIAL)
+        /* Cast away const: error_message is protobuf-c's non-const char*, but
+         * both arms are static read-only strings (a literal and satpush_strerror's
+         * const char*), never freed or mutated - same pattern as the literal
+         * assignments above. */
+        resp->error_message = (char *)((pull_rc == SATPUSH_PARTIAL)
             ? "DTP transfer incomplete (state saved for resume on next pass)"
-            : satpush_strerror(pull_rc);
+            : satpush_strerror(pull_rc));
         /* On PARTIAL the temp file and bitmap survive; the next deploy for
          * the same (app_name, expected_checksum) picks up from the sidecar.
          * On HARD_ERROR the temp file may be unusable; leave it for now -
