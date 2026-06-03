@@ -29,10 +29,8 @@ sources = files(
 	'src/backup_manager.c',
 	'src/app_metadata.c',
 	# DTP client logic, session-state sidecar, and SHA256 now live in
-	# libsatpush (../libsatpush). See libsatpush_sources below for the
-	# inline-compilation glue. Pre-extract files src/dtp_client.c,
-	# src/session_state.c, src/sha256.c are retained on disk for revert
-	# safety during the v0.1 extract; they are not in the build.
+	# libsatpush (../libsatpush); see libsatpush_sources below for the
+	# inline-compilation glue.
 	# Same trick as the APM: providing dbg_log_impl/dbg_warn_impl ourselves
 	# stops libdtp's dtp_log.o from leaking [LOG]/[WARN] into operator output
 	# during a deploy. SATDEPLOY_DTP_VERBOSE=1 turns it back on for debugging.
@@ -85,10 +83,11 @@ if test_loss_filter
 	# Flight builds leave LTO on for size. See run-container-build.sh.
 endif
 
-# F3.b naive-baseline gate. Local to the agent — the change is in
-# src/dtp_client.c (the agent's wrapper around libdtp's transfer call),
-# not in libdtp itself. So no add_global_arguments — flight libdtp stays
-# byte-identical, only the agent's retry/resume scaffolding gets disabled.
+# F3.b naive-baseline gate. NOTE: the SATDEPLOY_NAIVE_BASELINE retry-disable
+# logic moved out with src/dtp_client.c during the libsatpush extract and is
+# not yet re-wired into libsatpush/src/satpush_pull.c, so this option is
+# currently a no-op on the live pull path. Re-wire before rerunning the F3.b
+# naive comparison. Flight libdtp stays byte-identical either way.
 naive_baseline = get_option('naive_baseline')
 naive_baseline_args = []
 if naive_baseline
