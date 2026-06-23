@@ -172,3 +172,26 @@ satdeploy_agent = executable(
 		'-Wl,-s',
 	] + test_loss_filter_link_args,
 )
+
+# Raw DTP transport reference (RQ2). A bare libdtp client -- one dtp_start_transfer,
+# resume off, no retry/resume/integrity -- built from the same csp/param/dtp deps and
+# cross-compiled alongside the agent so it runs on the same node under test.
+dtp_pull = executable(
+	'dtp-pull',
+	'src/dtp_pull.c',
+	include_directories: dirs,
+	dependencies: deps,
+	install: true,
+	c_args: [
+		'-Os',
+		'-Wall', '-Wextra',
+		'-ffunction-sections',
+		'-fdata-sections',
+	],
+	link_args: [
+		'-ldl',
+		'-Wl,--gc-sections',
+		'-Wl,--build-id=none',
+		'-Wl,-s',
+	],
+)
