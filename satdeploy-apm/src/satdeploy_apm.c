@@ -44,12 +44,17 @@
 #define DEFAULT_TIMEOUT 360000
 
 /* DTP defaults.
- * Throughput is intentionally conservative: at 10 MB/s with MTU 1024 the
- * receiver fires ~9.8k packets/sec, exhausting CSP_BUFFER_COUNT (1000) on
- * a localhost ZMQ loop and causing "RX zmq: Failed to get csp_buffer"
- * drops mid-transfer. 3 MB/s keeps the buffer pool from saturating. */
-#define DTP_DEFAULT_MTU          1024
-#define DTP_DEFAULT_THROUGHPUT   3000000
+ * MTU is normalized to 256 to match the deployed dipp uploader's REAL session
+ * MTU (measured on the flatsat: server log shows 1024 KB/s at 4096 pkt/s =
+ * 256 B/pkt; the dipp -m default of 200 is overridden in the deployed config),
+ * so the csp-intercept loss sweep drops the same-sized fragment on every arm.
+ * Throughput is paced to hold the receiver packet rate in the buffer-safe
+ * regime: at MTU 1024 / 3 MB/s the agent ran ~2.95k pkt/s without exhausting
+ * CSP_BUFFER_COUNT (1000); at MTU 256, 0.72 MB/s keeps the same ~2.9k pkt/s
+ * and avoids "RX zmq: Failed to get csp_buffer" drops on a fast (localhost
+ * ZMQ) path. On can0 the 1 Mbit/s link is the real bottleneck. */
+#define DTP_DEFAULT_MTU          256
+#define DTP_DEFAULT_THROUGHPUT   720000
 #define DTP_DEFAULT_TIMEOUT_S    300
 
 /*

@@ -120,10 +120,121 @@ int copy_file(const char *src, const char *dst) {
     return result;
 }
 
+/* Backup retention knob (opt-in; default = unlimited, i.e. shipped behavior).
+ *   SATDEPLOY_BACKUP_KEEP unset/empty -> -1 (no cap, original behavior)
+ *   SATDEPLOY_BACKUP_KEEP=0           -> backups disabled (rollback feature off)
+ *   SATDEPLOY_BACKUP_KEEP=N (N>0)     -> keep only the N newest .bak GLOBALLY
+ * Used to bound /opt during loss-sweep measurement runs that deploy many
+ * unique app_names (each app_name is a separate backup dir, so a per-app cap
+ * would not bound total disk). Orthogonal to transfer recovery (ARQ/sha256). */
+static int backup_keep_limit(void) {
+    const char *v = getenv("SATDEPLOY_BACKUP_KEEP");
+    if (v == NULL || *v == '\0') {
+        return -1;
+    }
+    int n = atoi(v);
+    return n < 0 ? -1 : n;
+}
+
+struct bak_ent { char path[MAX_PATH_LEN]; time_t mtime; };
+
+/* Prune oldest .bak files across ALL app subdirs of BACKUP_DIR until at most
+ * `keep` remain. Runs after each backup_create, so steady state stays bounded. */
+static void backup_prune_global(int keep) {
+    if (keep < 0) {
+        return;
+    }
+    DIR *root = opendir(BACKUP_DIR);
+    if (root == NULL) {
+        return;
+    }
+
+    /* Pass 1: count .bak files. */
+    size_t cap = 0;
+    struct dirent *ade;
+    while ((ade = readdir(root)) != NULL) {
+        if (ade->d_name[0] == '.') continue;
+        char appdir[MAX_PATH_LEN];
+        snprintf(appdir, sizeof(appdir), "%s/%s", BACKUP_DIR, ade->d_name);
+        struct stat ast;
+        if (stat(appdir, &ast) != 0 || !S_ISDIR(ast.st_mode)) continue;
+        DIR *ad = opendir(appdir);
+        if (ad == NULL) continue;
+        struct dirent *fe;
+        while ((fe = readdir(ad)) != NULL) {
+            size_t l = strlen(fe->d_name);
+            if (l >= 4 && strcmp(fe->d_name + l - 4, ".bak") == 0) cap++;
+        }
+        closedir(ad);
+    }
+    if (cap == 0 || cap <= (size_t)keep) {
+        closedir(root);
+        return;
+    }
+
+    struct bak_ent *ents = malloc(cap * sizeof(*ents));
+    if (ents == NULL) {
+        closedir(root);
+        return;
+    }
+
+    /* Pass 2: collect path + mtime. */
+    rewinddir(root);
+    size_t n = 0;
+    while ((ade = readdir(root)) != NULL && n < cap) {
+        if (ade->d_name[0] == '.') continue;
+        char appdir[MAX_PATH_LEN];
+        snprintf(appdir, sizeof(appdir), "%s/%s", BACKUP_DIR, ade->d_name);
+        struct stat ast;
+        if (stat(appdir, &ast) != 0 || !S_ISDIR(ast.st_mode)) continue;
+        DIR *ad = opendir(appdir);
+        if (ad == NULL) continue;
+        struct dirent *fe;
+        while ((fe = readdir(ad)) != NULL && n < cap) {
+            size_t l = strlen(fe->d_name);
+            if (!(l >= 4 && strcmp(fe->d_name + l - 4, ".bak") == 0)) continue;
+            char p[MAX_PATH_LEN * 2];
+            snprintf(p, sizeof(p), "%s/%s", appdir, fe->d_name);
+            struct stat fst;
+            if (stat(p, &fst) != 0) continue;
+            strncpy(ents[n].path, p, MAX_PATH_LEN - 1);
+            ents[n].path[MAX_PATH_LEN - 1] = '\0';
+            ents[n].mtime = fst.st_mtime;
+            n++;
+        }
+        closedir(ad);
+    }
+    closedir(root);
+
+    if (n > (size_t)keep) {
+        /* Insertion sort ascending by mtime (n is small in steady state). */
+        for (size_t i = 1; i < n; i++) {
+            struct bak_ent key = ents[i];
+            size_t j = i;
+            while (j > 0 && ents[j - 1].mtime > key.mtime) {
+                ents[j] = ents[j - 1];
+                j--;
+            }
+            ents[j] = key;
+        }
+        size_t to_remove = n - (size_t)keep;
+        for (size_t i = 0; i < to_remove; i++) {
+            unlink(ents[i].path);
+        }
+    }
+    free(ents);
+}
+
 int backup_create(const char *app_name, const char *src_path,
                   char *backup_path_out, size_t backup_path_size) {
     if (app_name == NULL || src_path == NULL) {
         return -1;
+    }
+
+    /* Retention disabled entirely (KEEP=0): skip backup, deploy still succeeds. */
+    int keep = backup_keep_limit();
+    if (keep == 0) {
+        return 0;
     }
 
     /* Check source file exists */
@@ -197,6 +308,9 @@ int backup_create(const char *app_name, const char *src_path,
 
     printf("[backup] backed up → %.8s\n", hash);
     fflush(stdout);
+
+    /* Enforce global retention cap (no-op when unset/-1). */
+    backup_prune_global(keep);
     return 0;
 }
 
