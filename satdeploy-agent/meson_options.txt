@@ -1,0 +1,14 @@
+# Restored: meson.build:56 reads this option but no options file existed in the
+# tree, so `meson setup satdeploy-agent` failed outright (including via
+# scripts/dev-shell.sh's build-agent). Default and semantics are taken verbatim
+# from the comment block at meson.build:40-55 -- false is the flight build, which
+# leaves the --wrap=csp_qfifo_write link arg unset.
+option('test_loss_filter', type: 'boolean', value: false,
+       description: 'Build the test-only loss_filter scaffolding (wraps csp_qfifo_write)')
+
+# The thesis F3.b control build: same source with retry/resume compiled out, so
+# the evaluation can attribute completion to recovery rather than to any other
+# difference between tools. Referenced by the agent sources as
+# SATDEPLOY_NAIVE_BASELINE (dtp_client.c:39 sets DTP_MAX_RETRY_ROUNDS to 0).
+option('naive_baseline', type: 'boolean', value: false,
+       description: 'Compile out retry/resume to build the naive control agent')
