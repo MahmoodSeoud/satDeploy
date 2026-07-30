@@ -385,10 +385,14 @@ static void dtp_server_session_stop(dtp_server_session_t *s) {
  * external_server: if non-NULL, callers are managing the DTP server lifecycle
  * (this is the push -a path keeping one server alive across the whole loop).
  * If NULL we spawn and reap a private server inside this call (solo push).
+ *
+ * dtp_mtu: always a concrete, already-validated value — callers resolve the
+ * default before this point, so the ground's DTP_DEFAULT_MTU is the single
+ * authority for what goes on the wire.
  */
 static int deploy_single_app(unsigned int node, char *app_name,
                               const char *local_override, const char *remote_override,
-                              int force, satdeploy_config_t *config,
+                              int force, uint32_t dtp_mtu, satdeploy_config_t *config,
                               dtp_server_session_t *external_server)
 {
     const char *local_path = local_override;
@@ -540,7 +544,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
     deploy_req.dtp_server_node = ground_node;
     deploy_req.dtp_server_port = 7;
     deploy_req.payload_id = payload_id;
-    deploy_req.dtp_mtu = DTP_DEFAULT_MTU;
+    deploy_req.dtp_mtu = dtp_mtu;
     deploy_req.dtp_throughput = DTP_DEFAULT_THROUGHPUT;
     deploy_req.dtp_timeout = DTP_DEFAULT_TIMEOUT_S;
 
@@ -642,7 +646,8 @@ static int satdeploy_deploy_cmd(struct slash *slash)
             if (i + 1 < sub_argc &&
                 (strcmp(sub_argv[i], "-f") == 0 || strcmp(sub_argv[i], "--file") == 0 ||
                  strcmp(sub_argv[i], "-r") == 0 || strcmp(sub_argv[i], "--remote") == 0 ||
-                 strcmp(sub_argv[i], "-n") == 0 || strcmp(sub_argv[i], "--node") == 0)) {
+                 strcmp(sub_argv[i], "-n") == 0 || strcmp(sub_argv[i], "--node") == 0 ||
+                 strcmp(sub_argv[i], "-m") == 0 || strcmp(sub_argv[i], "--mtu") == 0)) {
                 reordered[nopt++] = sub_argv[++i];
             }
         } else {
@@ -656,6 +661,7 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     int total = nopt + npos;
 
     int deploy_all = 0;
+    unsigned int mtu = 0;
     optparse_t *parser = optparse_new("satdeploy push", "<app_name> | -f PATH -r PATH | -a");
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
@@ -663,12 +669,25 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path");
     optparse_add_set(parser, 'F', "force", 1, &force, "Force deploy even if same version");
     optparse_add_set(parser, 'a', "all", 1, &deploy_all, "Deploy all apps from config");
+    optparse_add_unsigned(parser, 'm', "mtu", "BYTES", 0, &mtu, "DTP MTU 64-1024 (default 1024)");
 
     int argi = optparse_parse(parser, total, reordered);
     if (argi < 0) {
         optparse_del(parser);
         return SLASH_EINVAL;
     }
+
+    /* Validate at the boundary: the agent uses mtu-8 as its fragment payload
+     * span, so a tiny value would fail far from the mistake, on the flight
+     * side. Reject here, before any request is built or sent. The upper bound
+     * is DTP_DEFAULT_MTU, the largest value any deployment has ever run. */
+    if (mtu != 0 && (mtu < 64 || mtu > DTP_DEFAULT_MTU)) {
+        printf("Error: --mtu %u out of range [64, %u]\n", mtu, DTP_DEFAULT_MTU);
+        optparse_del(parser);
+        return SLASH_EUSAGE;
+    }
+    if (mtu == 0)
+        mtu = DTP_DEFAULT_MTU;
 
     /* deploy_single_app re-derives adhoc mode from local/remote overrides;
      * we just need a place to land app_name when ad-hoc with -f/-r. */
@@ -701,7 +720,7 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         int failed = 0;
         for (int i = 0; i < all_config->num_apps; i++) {
             int rc = deploy_single_app(node, all_config->apps[i].name,
-                                       NULL, NULL, force, all_config,
+                                       NULL, NULL, force, mtu, all_config,
                                        &shared_server);
             if (rc != SLASH_SUCCESS) failed++;
         }
@@ -756,7 +775,7 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         node = slash_dfl_node;
     }
 
-    return deploy_single_app(node, app_name, local_path, remote_path, force, config, NULL);
+    return deploy_single_app(node, app_name, local_path, remote_path, force, mtu, config, NULL);
 }
 
 static int satdeploy_rollback_cmd(struct slash *slash)

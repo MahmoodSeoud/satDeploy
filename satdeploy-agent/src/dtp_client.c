@@ -171,7 +171,9 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         return -1;
     }
 
-    /* Apply defaults for zero values */
+    /* Apply defaults for zero values. The satdeploy APM always sends a
+     * concrete mtu (its DTP_DEFAULT_MTU is the wire authority), so the mtu
+     * fallback here only guards requests from foreign clients. */
     if (mtu == 0)        mtu = DTP_DEFAULT_MTU;
     if (throughput == 0) throughput = DTP_DEFAULT_THROUGHPUT;
     if (timeout == 0)    timeout = DTP_DEFAULT_TIMEOUT_S;
