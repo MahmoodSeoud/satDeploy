@@ -422,12 +422,17 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
 
     free(ctx.recv_bitmap);
 
+    /* Every return path below flushes: the agent may be killed right after a
+     * failed deploy (harness teardown, watchdog), and an unflushed diagnostic
+     * makes an honest failure look like a hang in the captured log. */
     if (ctx.error != 0) {
         printf("\033[31m[dtp]    error: write failed\033[0m\n");
+        fflush(stdout);
         return -1;
     }
     if (hard_error) {
         printf("\033[31m[dtp]    error: download failed (status=%d)\033[0m\n", hard_error);
+        fflush(stdout);
         return -1;
     }
     if (!fully_received) {
@@ -438,6 +443,7 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         printf("\033[31m[dtp]    error: incomplete after %d retry round(s) (%u/%u packets) — state saved for resume\033[0m\n",
                round, got, ctx.nof_packets);
 #endif
+        fflush(stdout);
         return -1;
     }
 
