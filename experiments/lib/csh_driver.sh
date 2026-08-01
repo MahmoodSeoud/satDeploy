@@ -24,11 +24,15 @@ _csh_init_path() {
     transport_csh_init
 }
 
-# csh_push <app_name> <log_path> [timeout_s]
+# csh_push <app_name> <local_path> <remote_path> <log_path> [timeout_s]
 #
 # Issues a single push for <app_name> against the agent at $CSH_AGENT_NODE,
 # capturing all stdout/stderr to <log_path>. Returns csh's exit code, or
 # 124 if the wall-clock timeout fires (matching coreutils' `timeout`).
+#
+# local/remote are explicit because satdeploy v2 dropped the config file:
+# `satdeploy push` no longer resolves paths by app name, so every push
+# names both ends with -f/-r.
 #
 # Why a timeout: at high loss rates the CSP route discovery / port-20
 # request can never complete, and csh would otherwise hang indefinitely
@@ -36,8 +40,10 @@ _csh_init_path() {
 # wait so the trial recorded as `timeout` instead of running for hours.
 csh_push() {
     local app="$1"
-    local log_path="$2"
-    local timeout_s="${3:-${PUSH_TIMEOUT_S:-300}}"
+    local local_path="$2"
+    local remote_path="$3"
+    local log_path="$4"
+    local timeout_s="${5:-${PUSH_TIMEOUT_S:-300}}"
     local init_file; init_file="$(_csh_init_path)"
 
     # script -q quiets the "Script started/done" framing.
@@ -47,11 +53,11 @@ csh_push() {
     # command's stdout/stderr is what we redirect into log_path.
     timeout --signal=KILL "$timeout_s" \
         script -qfec \
-            "$CSH_BIN -i $init_file \"satdeploy push $app -n $CSH_AGENT_NODE\"" \
+            "$CSH_BIN -i $init_file \"satdeploy push $app -n $CSH_AGENT_NODE -f $local_path -r $remote_path\"" \
             /dev/null </dev/null >"$log_path" 2>&1
 }
 
-# csh_push_async <app_name> <log_path> <pid_out_file>
+# csh_push_async <app_name> <local_path> <remote_path> <log_path> <pid_out_file>
 #
 # Same as csh_push but launches in the background. The harness uses this
 # for E4 (kill mid-transfer): start the push, sleep, kill the agent, see
@@ -59,11 +65,13 @@ csh_push() {
 # tears the wrapped csh down too.
 csh_push_async() {
     local app="$1"
-    local log_path="$2"
-    local pid_out="$3"
+    local local_path="$2"
+    local remote_path="$3"
+    local log_path="$4"
+    local pid_out="$5"
     local init_file; init_file="$(_csh_init_path)"
     nohup script -qfec \
-        "$CSH_BIN -i $init_file \"satdeploy push $app -n $CSH_AGENT_NODE\"" \
+        "$CSH_BIN -i $init_file \"satdeploy push $app -n $CSH_AGENT_NODE -f $local_path -r $remote_path\"" \
         /dev/null </dev/null >"$log_path" 2>&1 &
     echo $! > "$pid_out"
 }

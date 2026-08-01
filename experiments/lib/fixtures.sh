@@ -14,6 +14,10 @@ set -euo pipefail
 FIXTURE_DIR="${FIXTURE_DIR:-/tmp/satdeploy-fixtures}"
 mkdir -p "$FIXTURE_DIR"
 
+# Where staged fixtures land, i.e. the -f path each push names. The harness
+# reads this to build the push command line.
+FIXTURE_STAGE_DIR="${FIXTURE_STAGE_DIR:-/tmp/satdeploy-test-apps}"
+
 # fixture_make <size_bytes> <seed_int> [out_path]
 #
 # Writes a deterministic-by-seed binary of the requested size. Echoes the
@@ -47,16 +51,16 @@ fixture_sha256() {
     sha256sum "$1" | awk '{print $1}'
 }
 
-# fixture_install_into_config <fixture_path> <app_name> <config_path>
+# fixture_stage <fixture_path>
 #
-# The satdeploy APM looks up apps by name in ~/.satdeploy/config.yaml.
-# Rather than mutate the config every trial, we symlink the fixture to
-# the path the config already expects (/tmp/satdeploy-test-apps/<app>).
-# Reuses existing app entries (hello, controller, telemetry, payload) —
-# the size determines which app slot to use.
+# Stage the fixture under $FIXTURE_STAGE_DIR with a size-derived app name
+# (hello, controller, telemetry, payload). satdeploy v2 has no config file:
+# the push names both paths with -f/-r, so the app name is only a label —
+# but keeping the size->name mapping keeps CSV rows comparable with the v1
+# cells.
 #
 # Emits the app name on stdout so the caller can pass it to csh_push.
-fixture_install_into_config() {
+fixture_stage() {
     local fixture_path="$1"
     local size_bytes
     size_bytes="$(stat -c%s "$fixture_path")"
@@ -72,7 +76,7 @@ fixture_install_into_config() {
         app="payload"
     fi
 
-    local target_local="/tmp/satdeploy-test-apps/${app}"
+    local target_local="${FIXTURE_STAGE_DIR}/${app}"
     mkdir -p "$(dirname "$target_local")"
     # Use cp -f, not symlink — the APM may stat the file and chmod, and
     # symlink semantics around DTP registration are untested. cp is safe.

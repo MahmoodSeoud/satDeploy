@@ -179,19 +179,14 @@ csv_init "$CSV_PATH"
 # ---- 1. Fixture ----------------------------------------------------------
 fixture_path="$(fixture_make "$SIZE_BYTES" "$SEED")"
 source_sha="$(fixture_sha256 "$fixture_path")"
-app_name="$(fixture_install_into_config "$fixture_path" "")"
+app_name="$(fixture_stage "$fixture_path")"
 
-# Resolve the remote path the agent will write to. Pulled from
-# ~/.satdeploy/config.yaml without requiring a YAML parser — just grep the
-# `remote:` field in the matching app block. Brittle but contained.
-remote_path="$(awk -v app="$app_name" '
-    $0 ~ "^  "app":$" { in_app = 1; next }
-    in_app && /^  [a-zA-Z]/ && !/^    / { in_app = 0 }
-    in_app && /remote:/ { print $2; exit }
-' /root/.satdeploy/config.yaml)"
-if [ -z "$remote_path" ]; then
-    remote_path="/tmp/satdeploy-target/${app_name}"
-fi
+# satdeploy v2 has no config file: the push command names both paths
+# explicitly, so the harness owns them outright instead of grepping
+# ~/.satdeploy/config.yaml for what the APM would resolve.
+local_path="${FIXTURE_STAGE_DIR}/${app_name}"
+remote_path="/tmp/satdeploy-target/${app_name}"
+mkdir -p "$(dirname "$remote_path")"
 
 # ---- 2. Setup -----------------------------------------------------------
 # Initialize outcome to empty so the early-fail path below can set it
@@ -225,6 +220,12 @@ case "$LINK_KIND" in
         ;;
     zmq)
         netem_apply "$LOSS_PCT" "$BURST_CORR" "$DELAY_MS" "$JITTER_MS" "$RATE_BPS"
+        # ZMQ PUB has no backpressure: past its high-water mark it silently
+        # drops, so an unpaced SVU blast bigger than ~1000 packets loses most
+        # of itself on the loopback and recovery crawls. 200 us between data
+        # packets (~5000 pkt/s) keeps the dev link loss-free; override with
+        # SVU_BLAST_PACE_US=0 to study the artifact itself.
+        export SVU_BLAST_PACE_US="${SVU_BLAST_PACE_US:-200}"
         ;;
 esac
 
@@ -266,13 +267,29 @@ for ((pass=1; pass <= MAX_PASSES; pass++)); do
     fi
 
     if [ "$should_kill_this_pass" = "1" ]; then
-        csh_push_async "$app_name" "$push_log" "$pid_file"
+        # Byte-kill baseline: progress carried over from earlier passes (the
+        # resume sidecar survives the kill by design) must not count toward
+        # this pass's threshold, or every kill pass after the first dies
+        # instantly. KILL_AT_BYTE means "kill after N NEW bytes this pass".
+        sidecar_file="${SESSION_STATE_DIR}/${app_name}.svupart"
+        kill_base="$(target_size "$sidecar_file")"
+        csh_push_async "$app_name" "$local_path" "$remote_path" "$push_log" "$pid_file"
         # Poll for kill condition. Whichever fires first wins.
         deadline=$(( $(date +%s) + TIMEOUT_S ))
         killed=0
         while [ "$(date +%s)" -lt "$deadline" ]; do
             if [ "$KILL_AT_BYTE" != "0" ]; then
-                cur="$(target_size "$remote_path")"
+                # SVU materializes the target file only after verification;
+                # mid-transfer progress is visible in the .svupart sidecar
+                # (16-byte header + data at fragment offsets), measured
+                # against this pass's starting size. Fall back to the target
+                # path for transports that write it directly.
+                cur_abs="$(target_size "$sidecar_file")"
+                if [ "$cur_abs" -gt "$kill_base" ]; then
+                    cur=$((cur_abs - kill_base))
+                else
+                    cur="$(target_size "$remote_path")"
+                fi
                 if [ "$cur" -ge "$KILL_AT_BYTE" ]; then
                     agent_kill_hard
                     killed=1
@@ -305,6 +322,12 @@ for ((pass=1; pass <= MAX_PASSES; pass++)); do
         # request times out). We don't care about its rc here — kill is
         # the expected event.
         csh_wait "$pid_file" 30 || true
+        # If the kill threshold never fired (the push finished or died on
+        # its own first), the agent is still up and the next pass's
+        # agent_start would refuse. Stop it; the pass loop restarts it.
+        if [ "$killed" = "0" ]; then
+            agent_stop
+        fi
         # Don't tear down sidecar — that's the whole point of this pass.
         continue
     fi
@@ -313,7 +336,7 @@ for ((pass=1; pass <= MAX_PASSES; pass++)); do
     # Pass our timeout into csh_push so a hung CSP handshake at high loss
     # doesn't run for hours.
     set +e
-    csh_push "$app_name" "$push_log" "$TIMEOUT_S"
+    csh_push "$app_name" "$local_path" "$remote_path" "$push_log" "$TIMEOUT_S"
     rc=$?
     set -e
     if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
