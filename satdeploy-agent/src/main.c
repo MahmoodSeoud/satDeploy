@@ -142,6 +142,12 @@ static csp_iface_t *iface_init(const char *interface, const char *port,
 }
 
 int main(int argc, char *argv[]) {
+    /* Line-buffer stdout even when it is a file/pipe (the experiment harness
+     * redirects it). The agent is routinely SIGKILLed mid-transfer -- that is
+     * the whole point of the E4 pass-window experiments -- and full buffering
+     * silently discards every transfer log line of a killed pass. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     static struct option long_options[] = {
         {"interface", required_argument, 0, 'i'},
         {"port", required_argument, 0, 'p'},
