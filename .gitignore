@@ -15,3 +15,7 @@ dist/
 # experiments/runs/, so we don't track them. (Per-trial log directories
 # land in /tmp/satdeploy-experiments/, also excluded.)
 experiments/results/
+
+# Meson wrap downloads (sqlite3.wrap pulls these at setup time)
+satdeploy-apm/lib/packagecache/
+satdeploy-apm/lib/sqlite-amalgamation-*/
