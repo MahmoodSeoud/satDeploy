@@ -149,6 +149,23 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
                       uint16_t mtu, uint32_t throughput, uint8_t timeout);
 
 /**
+ * Pull `dest_path` from `server_node` over SVU and verify it block-by-block
+ * against the manifest before returning. Supersedes dtp_download_file: the
+ * completion decision is the receiver's, and recovery re-requests only the
+ * blocks that failed. Returns 0 only if every block verified.
+ *
+ * @param server_node    CSP node serving the artifact.
+ * @param dest_path      Local path to write the verified file to.
+ * @param expected_size  Expected size in bytes (0 to skip the check).
+ * @param app_name       App identifier, for the cross-pass manifest sidecar.
+ * @param mtu            Fragment payload span (0 = build default).
+ * @return 0 on a block-verified transfer, -1 otherwise.
+ */
+int svu_download_file(uint32_t server_node, const char *dest_path,
+                      uint32_t expected_size, const char *app_name,
+                      uint16_t mtu);
+
+/**
  * Save app deployment metadata.
  *
  * @param app_name Application name.

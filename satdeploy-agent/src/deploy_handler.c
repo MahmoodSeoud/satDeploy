@@ -752,20 +752,18 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         }
     }
 
-    /* Download new file via DTP */
+    /* Pull the new file over SVU, block-verified against the manifest. */
 
     /* Download to a temp file first */
     char temp_path[MAX_PATH_LEN];
     snprintf(temp_path, sizeof(temp_path), "%s.tmp", req->remote_path);
 
-    if (dtp_download_file(req->dtp_server_node, req->payload_id,
-                          temp_path, req->expected_size,
-                          req->expected_checksum, req->app_name,
-                          req->dtp_mtu, req->dtp_throughput,
-                          req->dtp_timeout) != 0) {
+    if (svu_download_file(req->dtp_server_node, temp_path,
+                          req->expected_size, req->app_name,
+                          req->dtp_mtu) != 0) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_DTP_DOWNLOAD_FAILED;
-        resp->error_message = "DTP download failed";
+        resp->error_message = "SVU transfer did not verify";
         /* TODO: Restore from backup if we had one */
         return;
     }

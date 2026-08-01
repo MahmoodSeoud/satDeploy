@@ -48,6 +48,18 @@ int session_state_path(const char *app_name, char *out, size_t out_size) {
     return 0;
 }
 
+int session_state_svu_path(const char *app_name, char *out, size_t out_size) {
+    if (out == NULL || out_size == 0 || !app_name_is_safe(app_name)) {
+        return -1;
+    }
+    int n = snprintf(out, out_size, "%s/%s%s",
+                     SESSION_STATE_DIR, app_name, SESSION_SVU_EXT);
+    if (n < 0 || (size_t)n >= out_size) {
+        return -1;
+    }
+    return 0;
+}
+
 int session_state_dir_ensure(void) {
     if (mkdir_p(SESSION_STATE_DIR) != 0) {
         return -1;

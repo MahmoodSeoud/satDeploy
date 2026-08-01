@@ -37,6 +37,12 @@
 #define SESSION_STATE_DIR  "/var/lib/satdeploy/state"
 #define SESSION_STATE_EXT  ".dtpstate"
 
+/* The SVU transfer's cross-pass sidecar: a 16-byte header plus the raw
+ * partial reassembly buffer, written incrementally as fragments arrive (see
+ * svu_transfer.c). Distinct extension from the DTP bitmap sidecar so the two
+ * arms never read each other's state. */
+#define SESSION_SVU_EXT    ".svupart"
+
 /* On-disk schema version. Bump on incompatible state-file format changes. */
 #define SESSION_STATE_FORMAT_VERSION 1u
 
@@ -47,6 +53,12 @@
  * Returns 0 on success, -1 on bad name or buffer-too-small.
  */
 int session_state_path(const char *app_name, char *out, size_t out_size);
+
+/**
+ * Same as session_state_path but for the SVU data sidecar
+ * (<dir>/<app_name>.svupart). Same app_name sanitization rules.
+ */
+int session_state_svu_path(const char *app_name, char *out, size_t out_size);
 
 /**
  * Ensure SESSION_STATE_DIR exists with mode 0700. Creates parents as needed.

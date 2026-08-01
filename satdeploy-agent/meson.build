@@ -31,6 +31,14 @@ sources = files(
 	'src/dtp_client.c',
 	'src/session_state.c',
 	'src/sha256.c',
+	# The SVU transfer layer, which supersedes dtp_client.c's role as the
+	# thing that actually moves bytes. dtp_client.c is retained for now so the
+	# v1 arm can still be built for comparison; deploy_handler calls only
+	# svu_download_file. See src/svu_transfer.c for why the swap.
+	'src/svu_transfer.c',
+	'svu/svu_session.c',
+	'svu/ci_svu.c',
+	'svu/ci_sha256.c',
 	# Same trick as the APM: providing dbg_log_impl/dbg_warn_impl ourselves
 	# stops libdtp's dtp_log.o from leaking [LOG]/[WARN] into operator output
 	# during a deploy. SATDEPLOY_DTP_VERBOSE=1 turns it back on for debugging.
@@ -111,6 +119,7 @@ version_h = configure_file(
 dirs = include_directories(
 	'include',
 	'proto',
+	'svu',
 )
 
 csp_dep = dependency('csp', fallback: ['csp', 'csp_dep'])
