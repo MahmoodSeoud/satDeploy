@@ -29,7 +29,13 @@
 #include <dtp/dtp_file_payload.h>
 #include <dtp/dtp_protocol.h>
 #include "deploy.pb-c.h"
-#include "config.h"
+#include "svu_serve_session.h"
+
+/* Was config.h's; the config file is gone but the bound is still the one
+ * every path buffer in this file and the agent protocol agree on. */
+#ifndef MAX_PATH_LEN
+#define MAX_PATH_LEN 256
+#endif
 #include "history.h"
 #include "output.h"
 #include "version.h"
@@ -49,79 +55,6 @@
 #define DTP_DEFAULT_THROUGHPUT   3000000
 #define DTP_DEFAULT_TIMEOUT_S    300
 
-/*
- * Tab completion for app names from config
- */
-static void app_name_completer(struct slash *slash, char *token)
-{
-    satdeploy_config_t *cfg = satdeploy_config_load();
-    if (!cfg || !cfg->loaded || cfg->num_apps == 0)
-        return;
-
-    /* Find the token to complete (last word in the buffer) */
-    char *tok = token;
-    size_t tok_len = strlen(tok);
-
-    /* Strip leading spaces */
-    while (*tok == ' ')
-        tok++;
-    tok_len = strlen(tok);
-
-    int matches = 0;
-    int last_match = -1;
-
-    /* Count matches and print if multiple */
-    for (int i = 0; i < cfg->num_apps; i++) {
-        if (tok_len == 0 || strncmp(tok, cfg->apps[i].name, tok_len) == 0) {
-            matches++;
-            last_match = i;
-        }
-    }
-
-    if (matches == 0) {
-        return;
-    } else if (matches == 1) {
-        /* Single match — complete it */
-        size_t prefix_len = token - slash->buffer;
-        /* Preserve leading space */
-        if (*token == ' ')
-            prefix_len++;
-        snprintf(slash->buffer + prefix_len, slash->line_size - prefix_len,
-                 "%s", cfg->apps[last_match].name);
-        slash->length = prefix_len + strlen(cfg->apps[last_match].name);
-        slash->cursor = slash->length;
-    } else {
-        /* Multiple matches — find common prefix and print all */
-        printf("\n");
-        size_t common = strlen(cfg->apps[0].name);
-        int first_match = -1;
-        for (int i = 0; i < cfg->num_apps; i++) {
-            if (tok_len == 0 || strncmp(tok, cfg->apps[i].name, tok_len) == 0) {
-                printf("  %s\n", cfg->apps[i].name);
-                if (first_match == -1) {
-                    first_match = i;
-                } else {
-                    size_t p = 0;
-                    while (p < common &&
-                           cfg->apps[first_match].name[p] &&
-                           cfg->apps[i].name[p] &&
-                           cfg->apps[first_match].name[p] == cfg->apps[i].name[p])
-                        p++;
-                    if (p < common)
-                        common = p;
-                }
-            }
-        }
-        /* Fill buffer with common prefix */
-        if (common > tok_len && first_match >= 0) {
-            size_t prefix_len = tok - slash->buffer;
-            snprintf(slash->buffer + prefix_len, slash->line_size - prefix_len,
-                     "%.*s", (int)common, cfg->apps[first_match].name);
-            slash->length = prefix_len + common;
-            slash->cursor = slash->length;
-        }
-    }
-}
 
 /*
  * File utilities for computing size and checksum
@@ -169,31 +102,6 @@ static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
     return 0;
 }
 
-/* Deterministic per-app DTP payload_id.
- *
- * libdtp's payload_id is a uint8_t (256 values). Using a global counter
- * (next_payload_id++) gave each push a fresh slot, but the agent's resume
- * lookup needs the same payload_id across passes — so the counter approach
- * silently broke resume after csh restart or wrap-around.
- *
- * FNV-1a folded to 8 bits is the simplest deterministic mapping. Collisions
- * are inevitable with 256 slots and many apps; the SHA256 verify on the agent
- * is the safety net that catches a collision-induced wrong payload (mismatch
- * → reject + unlink sidecar, fresh transfer next pass). The del-then-add
- * pattern at the call site refreshes the registry contents on every push so
- * the slot always holds the file we're about to send. */
-static uint8_t payload_id_for_app(const char *app_name)
-{
-    /* 32-bit FNV-1a, folded down to 8 bits via XOR. Avoid 0 as it is libdtp's
-     * "no payload" sentinel in some places. */
-    uint32_t h = 2166136261u;
-    for (const unsigned char *p = (const unsigned char *)app_name; *p; p++) {
-        h ^= *p;
-        h *= 16777619u;
-    }
-    uint8_t folded = (uint8_t)(h ^ (h >> 8) ^ (h >> 16) ^ (h >> 24));
-    return folded == 0 ? 1 : folded;
-}
 
 static int send_deploy_request(unsigned int node, Satdeploy__DeployRequest *req,
                                Satdeploy__DeployResponse **resp_out)
@@ -235,7 +143,7 @@ static int satdeploy_status_cmd(struct slash *slash)
 
     optparse_t *parser = optparse_new("satdeploy status", "[-n node]");
     optparse_add_help(parser);
-    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
+    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: current csh node)");
 
     int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
     if (argi < 0) {
@@ -244,15 +152,10 @@ static int satdeploy_status_cmd(struct slash *slash)
     }
     optparse_del(parser);
 
-    /* Use agent_node from config if not specified via -n */
+    /* No config file: an unspecified -n means csh's currently selected node,
+     * which is the node the operator already picked with `node <N>`. */
     if (node == 0) {
-        satdeploy_config_t *config = satdeploy_config_load();
-        if (config && config->agent_node > 0) {
-            node = config->agent_node;
-        }
-        if (node == 0) {
-            node = slash_dfl_node;
-        }
+        node = slash_dfl_node;
     }
 
     Satdeploy__DeployRequest req = SATDEPLOY__DEPLOY_REQUEST__INIT;
@@ -310,81 +213,11 @@ static int satdeploy_status_cmd(struct slash *slash)
     return SLASH_SUCCESS;
 }
 
-/*
- * DTP server support — override weak get_payload_meta from libdtp
- * to use the file-based payload registry.
- */
-bool get_payload_meta(dtp_payload_meta_t *meta, uint8_t payload_id) {
-    return dtp_file_payload_get_meta(meta, payload_id);
-}
-
-/* DTP server thread context */
-typedef struct {
-    volatile bool exit_flag;
-    volatile bool ready;
-} dtp_server_ctx_t;
-
-static void *dtp_server_thread(void *arg) {
-    dtp_server_ctx_t *ctx = (dtp_server_ctx_t *)arg;
-    ctx->ready = true;
-    /* libdtp's dtp_server_main takes bool*, but we mark exit_flag volatile
-     * so writes from the calling thread are visible. Strip the qualifier at
-     * the boundary — both sides only do simple flag reads/writes. */
-    dtp_server_main((bool *)&ctx->exit_flag);
-    return NULL;
-}
-
-/* Server lifecycle bundle. Lets the caller decide how long the DTP server
- * lives — solo push spawns one per call (current behaviour), push -a keeps
- * a single instance up across every app in the loop.
- *
- * Why this matters: libdtp's dtp_server_run uses a `static csp_socket_t`
- * and unconditionally re-binds it to CSP port 7 on every entry. Within one
- * process, a second/third spawn does an unchecked re-bind on the still-
- * bound socket — csp_listen quietly reinitialises the rx_queue, the prior
- * thread's queue gets orphaned, and CSP buffer state diverges from what
- * the libdtp internals expect. Sequential satdeploy push commands escape
- * this because csh dispatches each one fresh; push -a does not, because
- * the entire loop runs inside one slash command and the spawn-and-die
- * pattern fires N times in tight succession. */
-typedef struct {
-    dtp_server_ctx_t ctx;
-    pthread_t thread;
-    bool active;
-} dtp_server_session_t;
-
-static int dtp_server_session_start(dtp_server_session_t *s) {
-    s->ctx.exit_flag = false;
-    s->ctx.ready = false;
-    s->active = false;
-    if (pthread_create(&s->thread, NULL, dtp_server_thread, &s->ctx) != 0) {
-        return -1;
-    }
-    /* Wait for the server thread to enter dtp_server_main */
-    for (int i = 0; i < 50 && !s->ctx.ready; i++) {
-        usleep(20000);
-    }
-    /* Give dtp_server_main time to bind port 7 before the agent connects */
-    usleep(200000);
-    s->active = true;
-    return 0;
-}
-
-static void dtp_server_session_stop(dtp_server_session_t *s) {
-    if (!s->active) return;
-    s->ctx.exit_flag = true;
-    pthread_join(s->thread, NULL);
-    s->active = false;
-}
 
 
 /**
  * Deploy a single app to the target node.
- * Used by both single-app push and --all.
- *
- * external_server: if non-NULL, callers are managing the DTP server lifecycle
- * (this is the push -a path keeping one server alive across the whole loop).
- * If NULL we spawn and reap a private server inside this call (solo push).
+ * The artifact is served over SVU for the duration of this call.
  *
  * dtp_mtu: always a concrete, already-validated value — callers resolve the
  * default before this point, so the ground's DTP_DEFAULT_MTU is the single
@@ -392,28 +225,11 @@ static void dtp_server_session_stop(dtp_server_session_t *s) {
  */
 static int deploy_single_app(unsigned int node, char *app_name,
                               const char *local_override, const char *remote_override,
-                              int force, uint32_t dtp_mtu, satdeploy_config_t *config,
-                              dtp_server_session_t *external_server)
+                              int force, uint32_t dtp_mtu)
 {
     const char *local_path = local_override;
     const char *remote_path = remote_override;
     int adhoc_mode = (local_override && remote_override);
-
-    /* Look up app-specific config */
-    satdeploy_app_config_t *app_config = NULL;
-    if (config) {
-        app_config = satdeploy_config_get_app(config, app_name);
-    }
-
-    /* Apply app-specific defaults (CLI args override) */
-    if (app_config) {
-        if (!local_path && app_config->local_path[0]) {
-            local_path = app_config->local_path;
-        }
-        if (!remote_path && app_config->remote_path[0]) {
-            remote_path = app_config->remote_path;
-        }
-    }
 
     /* Expand tilde in local_path */
     char expanded_path[MAX_PATH_LEN];
@@ -428,13 +244,13 @@ static int deploy_single_app(unsigned int node, char *app_name,
     /* Validate required fields */
     if (!local_path) {
         printf("Error: No local file specified\n");
-        printf("       Use -f <path> or set 'local' in config for app '%s'\n", app_name);
+        printf("       Use -f <path>\n");
         return SLASH_EUSAGE;
     }
 
     if (!remote_path) {
         printf("Error: No remote path specified\n");
-        printf("       Use -r <path> or set 'remote' in config for app '%s'\n", app_name);
+        printf("       Use -r <path>\n");
         return SLASH_EUSAGE;
     }
 
@@ -477,61 +293,28 @@ static int deploy_single_app(unsigned int node, char *app_name,
 
     if (adhoc_mode) {
         printf("  Ad-hoc mode: no service restart, no dependency ordering.\n");
-        printf("  To configure as a managed app, add it to config.yaml.\n\n");
     }
-    printf("Deploying %s via DTP:\n", app_name);
+    printf("Deploying %s over SVU:\n", app_name);
     printf("  Local:    %s\n", local_path);
     printf("  Remote:   %s\n", remote_path);
     printf("  Size:     %u bytes\n", file_size);
     printf("  Checksum: %.8s\n", checksum);
     printf("  Target:   node %u\n", node);
 
-    /* Step 1: Register the file as a DTP payload.
+    /* Step 1: Start serving the artifact over SVU.
      *
-     * Deterministic FNV-8 of app_name as the payload_id, with del-then-add to
-     * refresh whatever's currently in that slot. This way the agent can map
-     * (app_name → payload_id) without an extra round-trip, and a re-staged
-     * binary correctly overwrites stale registry contents on the same slot.
-     *
-     * dtp_file_payload_del prints 'ERROR: Payload id: X does not exist' to
-     * stdout when the slot is empty (which is the common case on a fresh
-     * push). That looks scary but is expected; suppress it by swapping fd 1
-     * to /dev/null for the duration of the call. */
-    uint8_t payload_id = payload_id_for_app(app_name);
-
-    fflush(stdout);
-    int saved_stdout = dup(STDOUT_FILENO);
-    int devnull = open("/dev/null", O_WRONLY);
-    if (devnull >= 0) {
-        dup2(devnull, STDOUT_FILENO);
-        close(devnull);
-    }
-    dtp_file_payload_del(payload_id);
-    fflush(stdout);
-    if (saved_stdout >= 0) {
-        dup2(saved_stdout, STDOUT_FILENO);
-        close(saved_stdout);
-    }
-
-    if (!dtp_file_payload_add(payload_id, local_path)) {
-        printf("Error: Failed to register file as DTP payload\n");
+     * There is no payload registry and no payload_id any more. libdtp
+     * addressed an artifact by a uint8_t slot, which is why v1 hashed app
+     * names into 256 values and carried a del-then-add dance plus an fd-1
+     * redirect to hide the registry's error output. SVU serves the buffer it
+     * is handed, so all of that goes away. */
+    svu_serve_session_t server = {0};
+    if (svu_serve_session_start(&server, local_path, SVU_SERVE_DEFAULT_BLOCK) != 0) {
+        printf("Error: Failed to start the SVU server\n");
         return SLASH_EIO;
     }
 
-    /* Step 2: Make sure a DTP server is running. push -a hands us one, in
-     * which case we leave it alone — the per-iteration spawn/join cycle is
-     * what causes the loop in --all (see dtp_server_session_t comment). */
-    dtp_server_session_t local_server = {0};
-    bool owns_server = (external_server == NULL);
-    if (owns_server) {
-        if (dtp_server_session_start(&local_server) != 0) {
-            printf("Error: Failed to start DTP server thread\n");
-            dtp_file_payload_del(payload_id);
-            return SLASH_EIO;
-        }
-    }
-
-    /* Step 3: Send CMD_DEPLOY — agent will pull the file via DTP */
+    /* Step 3: Send CMD_DEPLOY — agent will pull the file over SVU */
     csp_iface_t *default_iface = csp_iflist_get_by_isdfl(NULL);
     uint16_t ground_node = default_iface ? default_iface->addr : 0;
 
@@ -542,8 +325,11 @@ static int deploy_single_app(unsigned int node, char *app_name,
     deploy_req.expected_size = file_size;
     deploy_req.expected_checksum = checksum;
     deploy_req.dtp_server_node = ground_node;
+    /* Wire fields retained for protocol compatibility with agents that still
+     * speak v1. The SVU path derives its ports from svu_proto.h and needs no
+     * payload id, throughput hint, or idle timeout. */
     deploy_req.dtp_server_port = 7;
-    deploy_req.payload_id = payload_id;
+    deploy_req.payload_id = 0;
     deploy_req.dtp_mtu = dtp_mtu;
     deploy_req.dtp_throughput = DTP_DEFAULT_THROUGHPUT;
     deploy_req.dtp_timeout = DTP_DEFAULT_TIMEOUT_S;
@@ -557,18 +343,16 @@ static int deploy_single_app(unsigned int node, char *app_name,
     Satdeploy__DeployResponse *resp = NULL;
     int rc = send_deploy_request(node, &deploy_req, &resp);
 
-    /* Step 4: Tear down our private server (if we spawned one), drop the
-     * payload registration either way. Persistent-server callers keep their
-     * server alive for the next iteration. */
-    if (owns_server) {
-        dtp_server_session_stop(&local_server);
-    }
-    dtp_file_payload_del(payload_id);
+    /* Step 4: Wind the SVU server down. svu_serve_loop frees its CTRL port on
+     * stop, so a later push in the same process re-binds cleanly -- the
+     * re-bind hazard that forced v1 to share one server across a loop does
+     * not exist here. */
+    svu_serve_session_stop(&server);
 
     if (rc < 0) {
         printf("Error: No response from agent (timeout)\n");
         satdeploy_history_write_t hist = {
-            .module = config ? config->target_name : "default",
+            .module = "default",
             .app = app_name,
             .file_hash = checksum,
             .remote_path = remote_path,
@@ -584,7 +368,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
     if (!resp->success) {
         output_error(resp->error_message);
         satdeploy_history_write_t hist = {
-            .module = config ? config->target_name : "default",
+            .module = "default",
             .app = app_name,
             .file_hash = checksum,
             .remote_path = remote_path,
@@ -599,12 +383,12 @@ static int deploy_single_app(unsigned int node, char *app_name,
     }
 
     char success_msg[256];
-    snprintf(success_msg, sizeof(success_msg), "Deployed %s (%.8s) via DTP", app_name, checksum);
+    snprintf(success_msg, sizeof(success_msg), "Deployed %s (%.8s) over SVU", app_name, checksum);
     output_success(success_msg);
 
     /* Record successful deploy to history.db */
     satdeploy_history_write_t hist = {
-        .module = config ? config->target_name : "default",
+        .module = "default",
         .app = app_name,
         .file_hash = checksum,
         .remote_path = remote_path,
@@ -660,16 +444,14 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         reordered[nopt + i] = positional[i];
     int total = nopt + npos;
 
-    int deploy_all = 0;
     unsigned int mtu = 0;
     optparse_t *parser = optparse_new("satdeploy push", "<app_name> | -f PATH -r PATH | -a");
     optparse_add_help(parser);
-    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
-    optparse_add_string(parser, 'f', "local", "PATH", &local_path, "Local file path (overrides config)");
+    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: current csh node)");
+    optparse_add_string(parser, 'f', "local", "PATH", &local_path, "Local file path");
     optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path");
     optparse_add_set(parser, 'F', "force", 1, &force, "Force deploy even if same version");
-    optparse_add_set(parser, 'a', "all", 1, &deploy_all, "Deploy all apps from config");
-    optparse_add_unsigned(parser, 'm', "mtu", "BYTES", 0, &mtu, "DTP MTU 64-1024 (default 1024)");
+    optparse_add_unsigned(parser, 'm', "mtu", "BYTES", 0, &mtu, "Transfer MTU 64-1024 (default 1024)");
 
     int argi = optparse_parse(parser, total, reordered);
     if (argi < 0) {
@@ -692,48 +474,6 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     /* deploy_single_app re-derives adhoc mode from local/remote overrides;
      * we just need a place to land app_name when ad-hoc with -f/-r. */
     static char derived_name[128];
-
-    /* Handle --all: deploy every app in config */
-    if (deploy_all) {
-        optparse_del(parser);
-        satdeploy_config_t *all_config = satdeploy_config_load();
-        if (!all_config || all_config->num_apps == 0) {
-            printf("Error: No apps configured\n");
-            return SLASH_EINVAL;
-        }
-        /* Use agent_node from config if not specified via -n */
-        if (node == 0 && all_config->agent_node > 0)
-            node = all_config->agent_node;
-        if (node == 0)
-            node = slash_dfl_node;
-
-        /* Spawn the DTP server once for the whole loop. The per-iteration
-         * spawn-and-die pattern hits libdtp's static-socket re-bind issue
-         * after a couple of apps and stalls the transfer; one persistent
-         * server avoids the entire problem class. */
-        dtp_server_session_t shared_server = {0};
-        if (dtp_server_session_start(&shared_server) != 0) {
-            printf("Error: Failed to start DTP server thread\n");
-            return SLASH_EIO;
-        }
-
-        int failed = 0;
-        for (int i = 0; i < all_config->num_apps; i++) {
-            int rc = deploy_single_app(node, all_config->apps[i].name,
-                                       NULL, NULL, force, mtu, all_config,
-                                       &shared_server);
-            if (rc != SLASH_SUCCESS) failed++;
-        }
-
-        dtp_server_session_stop(&shared_server);
-
-        if (failed > 0) {
-            printf("\n%d of %d deployments failed\n", failed, all_config->num_apps);
-            return SLASH_EIO;
-        }
-        printf("\n%d app(s) deployed\n", all_config->num_apps);
-        return SLASH_SUCCESS;
-    }
 
     if (argi >= total) {
         /* No app name given — allow ad-hoc mode if both -f and -r are provided */
@@ -764,18 +504,11 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     }
     optparse_del(parser);
 
-    /* Load config for defaults */
-    satdeploy_config_t *config = satdeploy_config_load();
-
-    /* Use agent_node from config if not specified via -n */
-    if (node == 0 && config && config->agent_node > 0) {
-        node = config->agent_node;
-    }
     if (node == 0) {
         node = slash_dfl_node;
     }
 
-    return deploy_single_app(node, app_name, local_path, remote_path, force, mtu, config, NULL);
+    return deploy_single_app(node, app_name, local_path, remote_path, force, mtu);
 }
 
 static int satdeploy_rollback_cmd(struct slash *slash)
@@ -783,10 +516,12 @@ static int satdeploy_rollback_cmd(struct slash *slash)
     unsigned int node = 0;
     char *app_name = NULL;
     char *hash = NULL;
+    char *remote_path = NULL;
 
-    optparse_t *parser = optparse_new("satdeploy rollback", "<app_name>");
+    optparse_t *parser = optparse_new("satdeploy rollback", "<app_name> -r <remote_path>");
     optparse_add_help(parser);
-    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
+    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: current csh node)");
+    optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path (required)");
     optparse_add_string(parser, 'H', "hash", "HASH", &hash, "Specific backup hash to restore");
 
     int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
@@ -804,29 +539,13 @@ static int satdeploy_rollback_cmd(struct slash *slash)
     app_name = slash->argv[argi + 1];
     optparse_del(parser);
 
-    /* Load config for defaults */
-    satdeploy_config_t *config = satdeploy_config_load();
-
-    /* Use agent_node from config if not specified via -n */
-    if (node == 0 && config && config->agent_node > 0) {
-        node = config->agent_node;
-    }
     if (node == 0) {
         node = slash_dfl_node;
     }
 
-    /* Look up remote_path from config */
-    char *remote_path = NULL;
-    if (config) {
-        satdeploy_app_config_t *app_config = satdeploy_config_get_app(config, app_name);
-        if (app_config) {
-            remote_path = app_config->remote_path;
-        }
-    }
-
     if (!remote_path || !remote_path[0]) {
         char errmsg[256];
-        snprintf(errmsg, sizeof(errmsg), "No remote_path configured for '%s'", app_name);
+        snprintf(errmsg, sizeof(errmsg), "No remote path given for '%s'; pass -r <path>", app_name);
         output_error(errmsg);
         printf("Add it to ~/.satdeploy/config.yaml under apps/%s/remote\n", app_name);
         return SLASH_EINVAL;
@@ -843,7 +562,7 @@ static int satdeploy_rollback_cmd(struct slash *slash)
     Satdeploy__DeployResponse *resp = NULL;
     if (send_deploy_request(node, &req, &resp) < 0) {
         satdeploy_history_write_t hist = {
-            .module = config ? config->target_name : "default",
+            .module = "default",
             .app = app_name,
             .file_hash = "",
             .remote_path = remote_path,
@@ -859,7 +578,7 @@ static int satdeploy_rollback_cmd(struct slash *slash)
     if (!resp->success) {
         output_error(resp->error_message);
         satdeploy_history_write_t hist = {
-            .module = config ? config->target_name : "default",
+            .module = "default",
             .app = app_name,
             .file_hash = "",
             .remote_path = remote_path,
@@ -911,7 +630,7 @@ static int satdeploy_rollback_cmd(struct slash *slash)
 
     /* Record successful rollback to history.db */
     satdeploy_history_write_t hist = {
-        .module = config ? config->target_name : "default",
+        .module = "default",
         .app = app_name,
         .file_hash = restored_hash[0] ? restored_hash : "",
         .remote_path = remote_path,
@@ -931,9 +650,15 @@ static int satdeploy_list_cmd(struct slash *slash)
     unsigned int node = 0;
     char *app_name = NULL;
 
-    optparse_t *parser = optparse_new("satdeploy list", "<app_name>");
+    char *deploy_path = NULL;
+
+    optparse_t *parser = optparse_new("satdeploy list", "<app_name> [-r remote_path]");
     optparse_add_help(parser);
-    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
+    /* The agent dedups the "current" entry with its matching backup, so that
+     * row's path is the .bak file and not the install slot. Naming the slot
+     * here restores the distinction; without it the agent's path is shown. */
+    optparse_add_string(parser, 'r', "remote", "PATH", &deploy_path, "Remote install path, for the deployed row");
+    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: current csh node)");
 
     int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
     if (argi < 0) {
@@ -950,43 +675,9 @@ static int satdeploy_list_cmd(struct slash *slash)
     app_name = slash->argv[argi + 1];
     optparse_del(parser);
 
-    /* Validate the app exists in config before bothering the agent. The agent
-     * happily returns "no backups" for any string, which is indistinguishable
-     * from "you typo'd the name" — list one of the known apps instead. */
-    satdeploy_config_t *config = satdeploy_config_load();
-    int known = 0;
-    if (config) {
-        for (size_t i = 0; i < config->num_apps; i++) {
-            if (strcmp(config->apps[i].name, app_name) == 0) {
-                known = 1;
-                break;
-            }
-        }
-    }
-    if (!known) {
-        printf("Error: unknown app '%s'\n", app_name);
-        if (config && config->num_apps > 0) {
-            printf("       Available in config: ");
-            for (size_t i = 0; i < config->num_apps; i++) {
-                printf("%s%s", config->apps[i].name,
-                       i + 1 < config->num_apps ? ", " : "");
-            }
-            printf("\n");
-        } else {
-            printf("       No apps in config — run 'satdeploy init' or check %s\n",
-                   "~/.satdeploy/config.yaml");
-        }
-        return SLASH_EUSAGE;
-    }
 
-    /* Use agent_node from config if not specified via -n */
     if (node == 0) {
-        if (config && config->agent_node > 0) {
-            node = config->agent_node;
-        }
-        if (node == 0) {
-            node = slash_dfl_node;
-        }
+        node = slash_dfl_node;
     }
 
     /* Query versions (agent includes current deployed version in response) */
@@ -1010,23 +701,6 @@ static int satdeploy_list_cmd(struct slash *slash)
     snprintf(title, sizeof(title), "Versions for %s:", app_name);
     output_title(title);
 
-    /* Surface the on-target deploy path once at the top. We pull it from
-     * config rather than the agent's BackupEntry because the agent dedups
-     * "current" with its matching backup entry — when that happens, the
-     * BackupEntry's path is the .bak file, not the install slot. Config is
-     * the authoritative source for the deploy path. */
-    const char *deploy_path = NULL;
-    if (config) {
-        for (size_t i = 0; i < config->num_apps; i++) {
-            if (strcmp(config->apps[i].name, app_name) == 0) {
-                deploy_path = config->apps[i].remote_path;
-                break;
-            }
-        }
-    }
-    if (deploy_path && deploy_path[0]) {
-        printf("  Deploy path: %s\n", deploy_path);
-    }
     printf("\n");
 
     if (resp->n_backups == 0) {
@@ -1071,7 +745,7 @@ static int satdeploy_logs_cmd(struct slash *slash)
 
     optparse_t *parser = optparse_new("satdeploy logs", "<app_name>");
     optparse_add_help(parser);
-    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
+    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: current csh node)");
     optparse_add_unsigned(parser, 'l', "lines", "NUM", 0, &lines, "Number of log lines (default: 100)");
 
     int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
@@ -1090,37 +764,10 @@ static int satdeploy_logs_cmd(struct slash *slash)
     optparse_del(parser);
 
     /* Load config for defaults */
-    satdeploy_config_t *config = satdeploy_config_load();
 
     /* Validate the app exists in config — same rationale as list_cmd. */
-    int known = 0;
-    if (config) {
-        for (size_t i = 0; i < config->num_apps; i++) {
-            if (strcmp(config->apps[i].name, app_name) == 0) {
-                known = 1;
-                break;
-            }
-        }
-    }
-    if (!known) {
-        printf("Error: unknown app '%s'\n", app_name);
-        if (config && config->num_apps > 0) {
-            printf("       Available in config: ");
-            for (size_t i = 0; i < config->num_apps; i++) {
-                printf("%s%s", config->apps[i].name,
-                       i + 1 < config->num_apps ? ", " : "");
-            }
-            printf("\n");
-        } else {
-            printf("       No apps in config — run 'satdeploy init'\n");
-        }
-        return SLASH_EUSAGE;
-    }
 
     /* Use agent_node from config if not specified via -n */
-    if (node == 0 && config && config->agent_node > 0) {
-        node = config->agent_node;
-    }
     if (node == 0) {
         node = slash_dfl_node;
     }
@@ -1152,176 +799,9 @@ static int satdeploy_logs_cmd(struct slash *slash)
     return SLASH_SUCCESS;
 }
 
-static int satdeploy_config_cmd(struct slash *slash)
-{
-    (void)slash;
 
-    /* Always reload config from disk to show current state */
-    satdeploy_config_reset();
 
-    char config_path[256];
-    if (satdeploy_config_path(config_path, sizeof(config_path)) < 0) {
-        printf("Error: Could not determine config path\n");
-        return SLASH_EIO;
-    }
 
-    printf("Config file: %s\n", config_path);
-
-    satdeploy_config_t *config = satdeploy_config_load();
-    if (!config) {
-        printf("  (failed to load)\n");
-        return SLASH_EIO;
-    }
-
-    printf("\nAgent node: %u\n", config->agent_node);
-
-    printf("\nApps: %d\n", config->num_apps);
-    for (int i = 0; i < config->num_apps; i++) {
-        satdeploy_app_config_t *app = &config->apps[i];
-        printf("  %s:\n", app->name);
-        if (app->local_path[0]) {
-            printf("    local:       %s\n", app->local_path);
-        }
-        if (app->remote_path[0]) {
-            printf("    remote:      %s\n", app->remote_path);
-        }
-    }
-
-    if (config->num_apps == 0) {
-        printf("  (none configured)\n");
-    }
-
-    return SLASH_SUCCESS;
-}
-
-/*
- * Interactive prompt helper: prints prompt, reads line, returns trimmed input.
- * If user enters empty string, default_val is used (if non-NULL).
- */
-static void prompt_string(const char *prompt, const char *default_val,
-                          char *out, size_t out_size)
-{
-    char buf[256];
-    if (default_val && default_val[0]) {
-        printf("  %s [%s]: ", prompt, default_val);
-    } else {
-        printf("  %s: ", prompt);
-    }
-    fflush(stdout);
-
-    if (!fgets(buf, sizeof(buf), stdin)) {
-        out[0] = '\0';
-        return;
-    }
-
-    /* Strip trailing newline */
-    size_t len = strlen(buf);
-    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
-        buf[--len] = '\0';
-
-    if (len == 0 && default_val) {
-        strncpy(out, default_val, out_size - 1);
-        out[out_size - 1] = '\0';
-    } else {
-        strncpy(out, buf, out_size - 1);
-        out[out_size - 1] = '\0';
-    }
-}
-
-static int prompt_int(const char *prompt, int default_val)
-{
-    char buf[64];
-    char def_str[32];
-    snprintf(def_str, sizeof(def_str), "%d", default_val);
-    prompt_string(prompt, def_str, buf, sizeof(buf));
-    if (buf[0] == '\0')
-        return default_val;
-    return atoi(buf);
-}
-
-static int satdeploy_init_cmd(struct slash *slash)
-{
-    char config_path[MAX_PATH_LEN];
-    if (satdeploy_config_path(config_path, sizeof(config_path)) < 0) {
-        output_error("Could not determine config path");
-        return SLASH_EINVAL;
-    }
-
-    /* Release terminal from slash raw mode so fgets works normally */
-    slash_release_std_in_out(slash);
-
-    /* Check if config already exists */
-    FILE *check = fopen(config_path, "r");
-    if (check) {
-        fclose(check);
-        char confirm[16];
-        prompt_string("Config already exists. Overwrite? (y/N)", "N",
-                      confirm, sizeof(confirm));
-        if (confirm[0] != 'y' && confirm[0] != 'Y') {
-            printf("  Aborted.\n");
-            slash_acquire_std_in_out(slash);
-            return SLASH_SUCCESS;
-        }
-    }
-
-    printf(COLOR_BOLD "\n  Setting up satdeploy configuration...\n\n" COLOR_RESET);
-
-    char name[MAX_APP_NAME_LEN];
-    prompt_string("Target name", "default", name, sizeof(name));
-
-    /* CSP is the only transport in APM (SSH is Python CLI only) */
-    printf("  Transport: csp\n");
-
-    char zmq_endpoint[MAX_PATH_LEN];
-    prompt_string("ZMQ endpoint (zmqproxy host)", "tcp://localhost:9600",
-                  zmq_endpoint, sizeof(zmq_endpoint));
-
-    int agent_node = prompt_int("Agent CSP node", 5425);
-    int ground_node = prompt_int("Ground CSP node", 40);
-
-    /* Restore slash raw mode before any further output */
-    slash_acquire_std_in_out(slash);
-
-    /* Create config directory */
-    char dir_path[MAX_PATH_LEN];
-    const char *home = getenv("HOME");
-    if (!home) {
-        output_error("HOME not set");
-        return SLASH_EINVAL;
-    }
-    snprintf(dir_path, sizeof(dir_path), "%s/.satdeploy", home);
-    mkdir(dir_path, 0755);
-
-    /* Write YAML config */
-    FILE *f = fopen(config_path, "w");
-    if (!f) {
-        char msg[MAX_PATH_LEN + 32];
-        snprintf(msg, sizeof(msg), "Could not write to %s", config_path);
-        output_error(msg);
-        return SLASH_EINVAL;
-    }
-
-    fprintf(f, "name: %s\n", name);
-    fprintf(f, "transport: csp\n");
-    fprintf(f, "zmq_endpoint: %s\n", zmq_endpoint);
-    fprintf(f, "agent_node: %d\n", agent_node);
-    fprintf(f, "ground_node: %d\n", ground_node);
-    fprintf(f, "backup_dir: /opt/satdeploy/backups\n");
-    fprintf(f, "max_backups: 10\n");
-    fprintf(f, "apps: {}\n");
-
-    fclose(f);
-
-    /* Force config reload on next access */
-    satdeploy_config_reset();
-
-    printf("\n");
-    char msg[MAX_PATH_LEN + 32];
-    snprintf(msg, sizeof(msg), "Config saved to %s", config_path);
-    output_success(msg);
-
-    return SLASH_SUCCESS;
-}
 
 static int satdeploy_version_cmd(struct slash *slash)
 {
@@ -1360,11 +840,9 @@ static int satdeploy_help_cmd(struct slash *slash)
 
 slash_command_group(satdeploy, "Satellite file deployment");
 slash_command_sub(satdeploy, help, satdeploy_help_cmd, NULL, "Show this help message");
-slash_command_sub(satdeploy, init, satdeploy_init_cmd, "", "Interactive setup, creates config.yaml.");
-slash_command_sub(satdeploy, config, satdeploy_config_cmd, "", "Show current configuration.");
-slash_command_sub_completer(satdeploy, push, satdeploy_deploy_cmd, app_name_completer, "<app> [options]", "Deploy one or more apps to a target.");
-slash_command_sub_completer(satdeploy, list, satdeploy_list_cmd, app_name_completer, "<app>", "List all versions of an app (deployed + backups).");
-slash_command_sub_completer(satdeploy, logs, satdeploy_logs_cmd, app_name_completer, "<app> [-l lines]", "Show logs for an app's service.");
-slash_command_sub_completer(satdeploy, rollback, satdeploy_rollback_cmd, app_name_completer, "<app> [-H hash]", "Rollback to a previous version.");
+slash_command_sub(satdeploy, push, satdeploy_deploy_cmd, "<app> [options]", "Deploy one or more apps to a target.");
+slash_command_sub(satdeploy, list, satdeploy_list_cmd, "<app>", "List all versions of an app (deployed + backups).");
+slash_command_sub(satdeploy, logs, satdeploy_logs_cmd, "<app> [-l lines]", "Show logs for an app's service.");
+slash_command_sub(satdeploy, rollback, satdeploy_rollback_cmd, "<app> [-H hash]", "Rollback to a previous version.");
 slash_command_sub(satdeploy, status, satdeploy_status_cmd, NULL, "Show status of deployed apps and services.");
 slash_command_sub(satdeploy, version, satdeploy_version_cmd, NULL, "Show APM version.");

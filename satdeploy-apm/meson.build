@@ -13,7 +13,7 @@ project('satdeploy-apm', 'c', subproject_dir: 'lib', version: '0.4.0', default_o
   'csp:use_rtable=true',
 ])
 
-includes = include_directories('src')
+includes = include_directories('src', 'svu')
 
 # version.h is regenerated whenever meson reconfigures, so the embedded git rev
 # reflects the source tree at setup time. Run `meson setup --reconfigure` after
@@ -53,8 +53,13 @@ satdeploy_apm = shared_library(
     [
       'src/satdeploy_apm.c',
       'src/sha256.c',
+      # The SVU transfer layer: ground end. Supersedes the libdtp server
+      # thread; see src/svu_serve_session.c for what the swap removes.
+      'src/svu_serve_session.c',
+      'svu/svu_serve.c',
+      'svu/ci_svu.c',
+      'svu/ci_sha256.c',
       'src/deploy.pb-c.c',
-      'src/config.c',
       'src/output.c',
       'src/history.c',
       # dtp_log_quiet.c provides dbg_log_impl/dbg_warn_impl/dbg_enable_colors
