@@ -166,7 +166,8 @@ One logical change per commit.
 
 - Reference any issue your PR fixes.
 - For wire-format changes, include the CHANGELOG entry in the same PR.
-- For new operator-facing commands, update `docs/commands.md` in the same PR.
+- For new operator-facing commands, update `docs/MANUAL.md` in the same PR (and
+  `docs/QUICKSTART.md` if it changes the first ten minutes).
 
 That's it. Open the PR, we'll talk.
 

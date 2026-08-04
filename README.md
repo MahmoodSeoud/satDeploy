@@ -94,9 +94,11 @@ Full build notes (Yocto layer, CSP version pinning, sysroot caveats) live in [do
 
 CubeSat operators upload software to satellites over UHF radio links that are flaky, slow (hundreds of bps to ~10 kbps), and only available during 5-10 minute pass windows. Existing tools (`csh upload`, spaceboot) operate at the transport layer. When a pass ends mid-transfer, or when the operator power-cycles the OBC, the next attempt starts over.
 
-satDeploy persists the receive bitmap to a sidecar at `/var/lib/satdeploy/state/<app>.dtpstate` whenever a pass ends partial. The next deploy for the same `(app, hash)` pre-patches the DTP request to ask only for the still-missing intervals. A re-staged binary (different SHA256) invalidates the sidecar via strict-equality content addressing, so a partial transfer can never silently inherit a stale bitmap.
+satDeploy writes each fragment to a sidecar at `/var/lib/satdeploy/state/<app>.svupart` as it arrives, so a pass that ends mid-transfer -- or an agent killed outright -- leaves everything already received on disk. The next deploy restores it, fetches a fresh per-block manifest, and re-requests only the blocks that fail verification.
 
-The state lives on persistent flash, so it survives a full agent reboot or OBC power cycle. Operators can power down between passes (for power budget, thermal, or mission scheduling) without losing the megabytes already shipped. See [`satdeploy-agent/include/session_state.h`](satdeploy-agent/include/session_state.h) for the on-disk format and design rationale.
+What is persisted is the DATA, never the verification state. That is what makes a stale sidecar safe: a binary re-staged on the ground between passes simply fails its block hashes and is refetched, with no content-addressed bookkeeping to keep in sync with the transfer geometry. It also means resume works across a change of MTU or block size, which a packet bitmap cannot survive.
+
+The state lives on persistent flash, so it survives a full agent reboot or OBC power cycle. Operators can power down between passes (for power budget, thermal, or mission scheduling) without losing the megabytes already shipped. See [`satdeploy-agent/src/svu_transfer.c`](satdeploy-agent/src/svu_transfer.c) for the sidecar format and design rationale.
 
 ## Measured
 
@@ -113,8 +115,8 @@ Reproducible via `experiments/sweep_tail_race.sh`, `experiments/sweep_loss_rates
 
 ## Docs
 
-- **[Command reference](docs/commands.md)**: every command and flag
-- **[Configuration reference](docs/configuration.md)**: full config schema, transports, dependency ordering
+- **[Quickstart](docs/QUICKSTART.md)**: ten minutes, copy-paste, from nothing to a verified deploy over a lossy link
+- **[Manual](docs/MANUAL.md)**: every command, the loss injector and wire monitor, versions and rollback, reproducible measurement runs
 - **[Building from source](docs/building.md)**: agent cross-compile, APM build, CSP version pinning
 - **[Changelog](CHANGELOG.md)**: what shipped in each version, including wire-format compatibility notes
 - **[Contributing](CONTRIBUTING.md)**: submodule setup, the CSP version pinning gotcha, manual loopback test recipe
