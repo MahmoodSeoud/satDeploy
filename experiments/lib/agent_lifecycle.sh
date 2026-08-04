@@ -6,7 +6,15 @@
 
 set -euo pipefail
 
-AGENT_BIN="${AGENT_BIN:-/satdeploy/satdeploy-agent/build-native/satdeploy-agent}"
+# Container-local build dir first (scripts/dev-shell.sh builds there to dodge
+# the macOS virtiofs clock-skew meson abort), legacy in-repo dir as fallback.
+if [ -z "${AGENT_BIN:-}" ]; then
+    if [ -x /root/builds/agent/satdeploy-agent ]; then
+        AGENT_BIN=/root/builds/agent/satdeploy-agent
+    else
+        AGENT_BIN=/satdeploy/satdeploy-agent/build-native/satdeploy-agent
+    fi
+fi
 AGENT_NODE="${AGENT_NODE:-5425}"
 AGENT_LOG_DIR="${AGENT_LOG_DIR:-/tmp/satdeploy-experiments}"
 AGENT_PIDFILE="${AGENT_PIDFILE:-${AGENT_LOG_DIR}/agent.pid}"

@@ -14,13 +14,14 @@ set -euo pipefail
 DEST="${1:-/tmp/satdeploy-test-apps}"
 mkdir -p "$DEST"
 
-# `hello` is a real shell script — proves the deploy preserves +x and
-# the file actually executes on the target.
-cat > "$DEST/hello" <<'EOF'
+# Names say what each file IS, so picking one for a test needs no lookup:
+# <role>-<size>. `script-79b` is a real shell script -- it proves the deploy
+# preserves +x and that the file actually executes on the target.
+cat > "$DEST/script-79b" <<'EOF'
 #!/bin/sh
 echo "hello from satdeploy test-app, deployed at $(date -u +%FT%TZ)"
 EOF
-chmod +x "$DEST/hello"
+chmod +x "$DEST/script-79b"
 
 # /dev/urandom so the SHA256 hash actually changes between regenerations —
 # important for testing version-skew detection and the no-op redeploy path.
@@ -32,9 +33,9 @@ make_blob() {
     fi
 }
 
-make_blob "$DEST/controller" $((100 * 1024))
-make_blob "$DEST/telemetry"  $((5 * 1024 * 1024))
-make_blob "$DEST/payload"    $((50 * 1024 * 1024))
+make_blob "$DEST/binary-100kb" $((100 * 1024))
+make_blob "$DEST/binary-5mb"   $((5 * 1024 * 1024))
+make_blob "$DEST/binary-50mb"  $((50 * 1024 * 1024))
 
 echo "Test apps in $DEST:"
 ls -lh "$DEST"

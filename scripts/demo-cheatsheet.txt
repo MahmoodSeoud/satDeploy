@@ -1,0 +1,36 @@
+=====================================================================
+ satdeploy lab.  LEFT pane = ground station.  RIGHT pane = satellite.
+ New here? docs/QUICKSTART.md   Full reference: docs/MANUAL.md
+=====================================================================
+
+DEPLOY something (watch the right pane verify it)
+  satdeploy push /apps/script-79b /target/script-79b
+  satdeploy list /target/script-79b       > = deployed, * = older version on board
+  satdeploy rollback /target/script-79b   restores the previous build, no uplink
+
+HOW GOOD IS THE LINK? (any CSP node, no files involved)
+  csp_link test 5425             loss, round-trip time, jitter, verdict
+
+BREAK THE LINK, then deploy through it
+  csp_loss start -L 0.10          10% of outbound packets vanish
+  satdeploy push /apps/binary-100kb /target/binary-100kb -F
+  csp_loss status                 how many actually got dropped
+  csp_loss stop                   clean link again
+
+  Right pane shows recovery: round 1 loses N ranges, round 2 re-requests
+  ONLY those, then VERIFIED. Raise -L to 0.3 and watch it take more rounds.
+
+RECORD THE WIRE (independent evidence of what crossed)
+  csp_monitor start -d 9 -o /tmp/wire.csv     (port 9 = the bulk transfer)
+  ... run a push ...
+  csp_monitor stop
+  Then in any shell:  head /tmp/wire.csv
+
+SURVIVE A LOST PASS (the thesis claim)
+  satdeploy push /apps/binary-5mb /target/binary-5mb
+  While it runs (~10 s), press Ctrl-C in the RIGHT pane. Pass window closed.
+  Restart the agent there (up-arrow, Enter), push the same line again.
+  It prints "restored N bytes from a prior pass" and sends only the rest.
+
+Exit: Ctrl-C the agent, then `exit` here.
+=====================================================================

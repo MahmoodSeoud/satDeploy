@@ -23,21 +23,49 @@ alias g='git'
 # Use the first one — it doesn't require root and is per-user.
 SATDEPLOY_APM_DIR="${SATDEPLOY_APM_DIR:-/root/.local/lib/csh}"
 
-agent() { ./satdeploy-agent/build-native/satdeploy-agent "$@"; }
+# Build dirs live on the CONTAINER filesystem, not the repo bind mount.
+# On macOS Docker the mount is virtiofs, whose mtimes can sit a few ms
+# ahead of the container clock; meson stats its own freshly written
+# coredata.dat, sees a timestamp "in the future", and aborts with
+# "Clock skew detected". /root is native overlayfs, so timestamps are
+# coherent there. The repo mount stays the SOURCE of truth; only build
+# artifacts move.
+SATDEPLOY_BUILD_ROOT="${SATDEPLOY_BUILD_ROOT:-/root/builds}"
+export AGENT_BIN="${AGENT_BIN:-$SATDEPLOY_BUILD_ROOT/agent/satdeploy-agent}"
+export AGENT_NAIVE_BIN="${AGENT_NAIVE_BIN:-$SATDEPLOY_BUILD_ROOT/agent-naive/satdeploy-agent}"
+
+agent() { "$SATDEPLOY_BUILD_ROOT/agent/satdeploy-agent" "$@"; }
+
+# meson setup wants --reconfigure on an existing build dir and refuses it
+# on a fresh one; branch so both paths work.
+_meson-setup() {
+    local dir="$1"; shift
+    if [ -f "$dir/build.ninja" ]; then
+        meson setup "$dir" "$@" --reconfigure
+    else
+        meson setup "$dir" "$@"
+    fi
+}
 
 build-agent() {
-    meson setup satdeploy-agent/build-native satdeploy-agent --reconfigure \
-        && ninja -C satdeploy-agent/build-native
+    _meson-setup "$SATDEPLOY_BUILD_ROOT/agent" satdeploy-agent \
+        && ninja -C "$SATDEPLOY_BUILD_ROOT/agent"
+}
+
+# The thesis control build: same source, recovery and resume compiled out.
+build-agent-naive() {
+    _meson-setup "$SATDEPLOY_BUILD_ROOT/agent-naive" satdeploy-agent -Dnaive_baseline=true \
+        && ninja -C "$SATDEPLOY_BUILD_ROOT/agent-naive"
 }
 
 # Builds the APM and installs the .so to where csh expects it. Auto-install
 # is the default because forgetting to copy and then hitting "No APMs found
 # in ..." is the most common dev-flow papercut.
 build-apm() {
-    meson setup satdeploy-apm/build satdeploy-apm --reconfigure \
-        && ninja -C satdeploy-apm/build \
+    _meson-setup "$SATDEPLOY_BUILD_ROOT/apm" satdeploy-apm \
+        && ninja -C "$SATDEPLOY_BUILD_ROOT/apm" \
         && mkdir -p "$SATDEPLOY_APM_DIR" \
-        && cp satdeploy-apm/build/libcsh_satdeploy_apm.so "$SATDEPLOY_APM_DIR/" \
+        && cp "$SATDEPLOY_BUILD_ROOT/apm/libcsh_satdeploy_apm.so" "$SATDEPLOY_APM_DIR/" \
         && echo "installed: $SATDEPLOY_APM_DIR/libcsh_satdeploy_apm.so"
 }
 

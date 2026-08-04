@@ -53,8 +53,8 @@ fixture_sha256() {
 
 # fixture_stage <fixture_path>
 #
-# Stage the fixture under $FIXTURE_STAGE_DIR with a size-derived app name
-# (hello, controller, telemetry, payload). satdeploy v2 has no config file:
+# Stage the fixture under $FIXTURE_STAGE_DIR with a size-derived name that says
+# what the file is (script-79b, binary-100kb, ...). satdeploy v2 has no config file:
 # the push names both paths with -f/-r, so the app name is only a label —
 # but keeping the size->name mapping keeps CSV rows comparable with the v1
 # cells.
@@ -67,13 +67,13 @@ fixture_stage() {
 
     local app
     if [ "$size_bytes" -le 1024 ]; then
-        app="hello"
+        app="script-79b"
     elif [ "$size_bytes" -le 200000 ]; then
-        app="controller"
+        app="binary-100kb"
     elif [ "$size_bytes" -le 10000000 ]; then
-        app="telemetry"
+        app="binary-5mb"
     else
-        app="payload"
+        app="binary-50mb"
     fi
 
     local target_local="${FIXTURE_STAGE_DIR}/${app}"
