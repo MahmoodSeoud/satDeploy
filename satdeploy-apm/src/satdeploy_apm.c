@@ -103,8 +103,30 @@ static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
 }
 
 
+/*
+ * Quick round trips (status, list, logs, rollback, and push's duplicate check)
+ * get a short timeout. Only CMD_DEPLOY needs the long one, because the agent
+ * holds its reply until the whole transfer has verified -- and inheriting that
+ * 6-minute wait for a status probe meant an unreachable agent produced six
+ * minutes of nothing before the first line of output.
+ */
+#define PROBE_TIMEOUT 15000
+
+static int send_deploy_request_timeout(unsigned int node,
+                                       Satdeploy__DeployRequest *req,
+                                       Satdeploy__DeployResponse **resp_out,
+                                       uint32_t timeout_ms);
+
 static int send_deploy_request(unsigned int node, Satdeploy__DeployRequest *req,
                                Satdeploy__DeployResponse **resp_out)
+{
+    return send_deploy_request_timeout(node, req, resp_out, PROBE_TIMEOUT);
+}
+
+static int send_deploy_request_timeout(unsigned int node,
+                                       Satdeploy__DeployRequest *req,
+                                       Satdeploy__DeployResponse **resp_out,
+                                       uint32_t timeout_ms)
 {
     size_t req_size = satdeploy__deploy_request__get_packed_size(req);
     uint8_t *req_buf = malloc(req_size);
@@ -118,13 +140,16 @@ static int send_deploy_request(unsigned int node, Satdeploy__DeployRequest *req,
     uint8_t resp_buf[4096];
 
     int resp_len = csp_transaction_w_opts(CSP_PRIO_NORM, node, SATDEPLOY_PORT,
-                                          DEFAULT_TIMEOUT, req_buf, req_size,
+                                          timeout_ms, req_buf, req_size,
                                           resp_buf, -1,  /* -1 = unknown reply size */
                                           0);  /* no CRC32: agent does not set it on reply */
     free(req_buf);
 
     if (resp_len <= 0) {
-        printf("No response from agent (timeout or error)\n");
+        printf("No response from agent (timeout or error).\n");
+        printf("  Is the agent running on node %u? Try: satdeploy status -n %u\n",
+               node, node);
+        printf("  On a lossy link the request packet itself can be lost -- retry.\n");
         return -1;
     }
 
@@ -137,6 +162,75 @@ static int send_deploy_request(unsigned int node, Satdeploy__DeployRequest *req,
     return 0;
 }
 
+/*
+ * Reorder argv so positional args come after options.
+ *
+ * slash's optparse is POSIX-style: it stops at the first non-option argument.
+ * So `satdeploy list hello -n 5425` parses `hello` and then STOPS, silently
+ * discarding `-n 5425` -- the command then targets node 0 and times out, with
+ * nothing to suggest the flag was the problem. Every subcommand that takes a
+ * positional app name needs this, not just push.
+ *
+ * Writes at most `max` entries into out[] and returns the count.
+ */
+static const char *const SATDEPLOY_VALUE_OPTS[] = {
+    "-f", "--local", "--file", "-r", "--remote", "-n", "--node",
+    "-m", "--mtu", "-l", "--lines", "-H", "--hash", NULL
+};
+
+static int satdeploy_reorder_argv(int argc, const char **argv,
+                                  const char **out, int max)
+{
+    const char *positional[8];
+    int nopt = 0, npos = 0;
+
+    for (int i = 0; i < argc && nopt < max; i++) {
+        if (argv[i][0] == '-') {
+            out[nopt++] = argv[i];
+            int takes_value = 0;
+            for (int k = 0; SATDEPLOY_VALUE_OPTS[k] != NULL; k++) {
+                if (strcmp(argv[i], SATDEPLOY_VALUE_OPTS[k]) == 0) {
+                    takes_value = 1;
+                    break;
+                }
+            }
+            if (takes_value && i + 1 < argc && nopt < max) {
+                out[nopt++] = argv[++i];
+            }
+        } else if (npos < 8) {
+            positional[npos++] = argv[i];
+        }
+    }
+    for (int i = 0; i < npos && nopt + i < max; i++) {
+        out[nopt + i] = positional[i];
+    }
+    return nopt + npos;
+}
+
+/*
+ * The app name is derived from the destination's basename, never typed.
+ * It labels the backup directory, the version history and the resume sidecar,
+ * so it must be stable for a given remote path -- which the basename is. Asking
+ * the operator for it as well as the path was asking for the same fact twice.
+ *
+ * "/opt/foo.bin" -> "foo". Dots after the first are dashed so the name is safe
+ * as a path component (the agent rejects '/', '..' and control characters).
+ */
+static void satdeploy_derive_app_name(const char *remote_path, char *out, size_t size)
+{
+    const char *base = strrchr(remote_path, '/');
+    base = base ? base + 1 : remote_path;
+    strncpy(out, base, size - 1);
+    out[size - 1] = '\0';
+    char *dot = strrchr(out, '.');
+    if (dot && dot != out) {
+        *dot = '\0';
+    }
+    for (char *q = out; *q; q++) {
+        if (*q == '.') *q = '-';
+    }
+}
+
 static int satdeploy_status_cmd(struct slash *slash)
 {
     unsigned int node = 0;
@@ -145,7 +239,11 @@ static int satdeploy_status_cmd(struct slash *slash)
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: current csh node)");
 
-    int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
+    const char *reordered[32];
+    int total = satdeploy_reorder_argv(slash->argc - 1,
+                                       (const char **)slash->argv + 1,
+                                       reordered, 32);
+    int argi = optparse_parse(parser, total, reordered);
     if (argi < 0) {
         optparse_del(parser);
         return SLASH_EINVAL;
@@ -244,13 +342,15 @@ static int deploy_single_app(unsigned int node, char *app_name,
     /* Validate required fields */
     if (!local_path) {
         printf("Error: No local file specified\n");
-        printf("       Use -f <path>\n");
+        printf("       satdeploy push %s -n <node> -f <local path> -r <remote path>\n",
+               app_name);
         return SLASH_EUSAGE;
     }
 
     if (!remote_path) {
         printf("Error: No remote path specified\n");
-        printf("       Use -r <path>\n");
+        printf("       satdeploy push %s -n <node> -f %s -r <remote path>\n",
+               app_name, local_path);
         return SLASH_EUSAGE;
     }
 
@@ -270,11 +370,28 @@ static int deploy_single_app(unsigned int node, char *app_name,
 
     /* Check if already deployed with same hash (skip if --force) */
     if (!force) {
+        /* Announce before blocking. This probe is the first thing that can
+         * hang, and a console that prints nothing for its whole timeout looks
+         * like the command was never accepted. */
+        printf("checking node %u...\n", node);
+        fflush(stdout);
+
         Satdeploy__DeployRequest status_req = SATDEPLOY__DEPLOY_REQUEST__INIT;
         status_req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_STATUS;
 
         Satdeploy__DeployResponse *status_resp = NULL;
-        if (send_deploy_request(node, &status_req, &status_resp) == 0 && status_resp->success) {
+        int probe_rc = send_deploy_request(node, &status_req, &status_resp);
+        if (probe_rc != 0) {
+            /* The probe is a short round trip; if it did not come back, the
+             * agent is almost certainly unreachable. Stop here rather than
+             * committing to a transfer whose reply we would wait minutes for.
+             * -F skips the probe entirely, which is the escape hatch when the
+             * agent IS there and the link merely ate the packet. */
+            printf("Aborting: no reply to the pre-flight check on node %u.\n", node);
+            printf("          Pass -F to push anyway without checking.\n");
+            return SLASH_EIO;
+        }
+        if (status_resp->success) {
             for (size_t i = 0; i < status_resp->n_apps; i++) {
                 if (strcmp(status_resp->apps[i]->app_name, app_name) == 0) {
                     if (status_resp->apps[i]->file_hash &&
@@ -291,15 +408,15 @@ static int deploy_single_app(unsigned int node, char *app_name,
             satdeploy__deploy_response__free_unpacked(status_resp, NULL);
     }
 
-    if (adhoc_mode) {
-        printf("  Ad-hoc mode: no service restart, no dependency ordering.\n");
-    }
-    printf("Deploying %s over SVU:\n", app_name);
-    printf("  Local:    %s\n", local_path);
-    printf("  Remote:   %s\n", remote_path);
-    printf("  Size:     %u bytes\n", file_size);
-    printf("  Checksum: %.8s\n", checksum);
-    printf("  Target:   node %u\n", node);
+    printf("%s -> node %u:%s  (%u bytes, %.8s)\n",
+           local_path, node, remote_path, file_size, checksum);
+    /* The agent holds its reply until the whole transfer has verified, so the
+     * next call blocks for as long as the transfer takes. Say so, and FLUSH:
+     * csh's stdout is a pipe under the experiment harness and under `script`,
+     * where full buffering would show the operator an empty, frozen console
+     * for the entire wait and print everything at once at the end. */
+    printf("  waiting for the satellite to verify...\n");
+    fflush(stdout);
 
     /* Step 1: Start serving the artifact over SVU.
      *
@@ -341,7 +458,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
     }
 
     Satdeploy__DeployResponse *resp = NULL;
-    int rc = send_deploy_request(node, &deploy_req, &resp);
+    int rc = send_deploy_request_timeout(node, &deploy_req, &resp, DEFAULT_TIMEOUT);
 
     /* Step 4: Wind the SVU server down. svu_serve_loop frees its CTRL port on
      * stop, so a later push in the same process re-binds cleanly -- the
@@ -412,44 +529,17 @@ static int satdeploy_deploy_cmd(struct slash *slash)
 
     int force = 0;
 
-    /*
-     * Reorder argv so positional args come after options.
-     * slash's optparse uses POSIX-style parsing (stops at first non-option),
-     * so "deploy test_app -f /tmp/binary" would fail without this.
-     */
-    int sub_argc = slash->argc - 1;
-    const char **sub_argv = (const char **)slash->argv + 1;
     const char *reordered[32];
-    int nopt = 0, npos = 0;
-    const char *positional[8];
-
-    for (int i = 0; i < sub_argc && i < 30; i++) {
-        if (sub_argv[i][0] == '-') {
-            reordered[nopt++] = sub_argv[i];
-            /* Options that take a value: consume the next arg too */
-            if (i + 1 < sub_argc &&
-                (strcmp(sub_argv[i], "-f") == 0 || strcmp(sub_argv[i], "--file") == 0 ||
-                 strcmp(sub_argv[i], "-r") == 0 || strcmp(sub_argv[i], "--remote") == 0 ||
-                 strcmp(sub_argv[i], "-n") == 0 || strcmp(sub_argv[i], "--node") == 0 ||
-                 strcmp(sub_argv[i], "-m") == 0 || strcmp(sub_argv[i], "--mtu") == 0)) {
-                reordered[nopt++] = sub_argv[++i];
-            }
-        } else {
-            if (npos < 8)
-                positional[npos++] = sub_argv[i];
-        }
-    }
-    /* Append positional args after options */
-    for (int i = 0; i < npos; i++)
-        reordered[nopt + i] = positional[i];
-    int total = nopt + npos;
+    int total = satdeploy_reorder_argv(slash->argc - 1,
+                                       (const char **)slash->argv + 1,
+                                       reordered, 32);
 
     unsigned int mtu = 0;
-    optparse_t *parser = optparse_new("satdeploy push", "<app_name> | -f PATH -r PATH | -a");
+    optparse_t *parser = optparse_new("satdeploy push", "<local path> <remote path> [-n node]");
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: current csh node)");
-    optparse_add_string(parser, 'f', "local", "PATH", &local_path, "Local file path");
-    optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path");
+    optparse_add_string(parser, 'f', "local", "PATH", &local_path, "Local file (same as the 1st positional)");
+    optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote path (same as the 2nd positional)");
     optparse_add_set(parser, 'F', "force", 1, &force, "Force deploy even if same version");
     optparse_add_unsigned(parser, 'm', "mtu", "BYTES", 0, &mtu, "Transfer MTU 64-1024 (default 1024)");
 
@@ -475,32 +565,29 @@ static int satdeploy_deploy_cmd(struct slash *slash)
      * we just need a place to land app_name when ad-hoc with -f/-r. */
     static char derived_name[128];
 
+    /* Positional form: `satdeploy push <local> <remote>`. -f/-r remain accepted
+     * for scripts that already use them; a positional only fills a slot the
+     * flags left empty. A third positional is the pre-v2 app-name argument,
+     * which is now derived and therefore ignored. */
+    for (int i = argi; i < total; i++) {
+        if (!local_path) {
+            local_path = (char *)reordered[i];
+        } else if (!remote_path) {
+            remote_path = (char *)reordered[i];
+        }
+    }
+    argi = total; /* positionals consumed above */
+
     if (argi >= total) {
-        /* No app name given — allow ad-hoc mode if both -f and -r are provided */
         if (local_path && remote_path) {
-            /* Derive app name from remote path basename, strip extension */
-            const char *base = strrchr(remote_path, '/');
-            base = base ? base + 1 : remote_path;
-            strncpy(derived_name, base, sizeof(derived_name) - 1);
-            derived_name[sizeof(derived_name) - 1] = '\0';
-            /* Strip final extension */
-            char *dot = strrchr(derived_name, '.');
-            if (dot && dot != derived_name) {
-                *dot = '\0';
-            }
-            /* Replace remaining dots with dashes */
-            for (char *p = derived_name; *p; p++) {
-                if (*p == '.') *p = '-';
-            }
+            satdeploy_derive_app_name(remote_path, derived_name, sizeof(derived_name));
             app_name = derived_name;
         } else {
-            printf("Error: app_name required (or use -f/-r for ad-hoc, or -a for all)\n");
-            optparse_help(parser, stdout);
+            printf("Error: need a local file and a remote path.\n");
+            printf("       satdeploy push <local path> <remote path> [-n node]\n");
             optparse_del(parser);
             return SLASH_EUSAGE;
         }
-    } else {
-        app_name = (char *)reordered[argi];
     }
     optparse_del(parser);
 
@@ -518,36 +605,52 @@ static int satdeploy_rollback_cmd(struct slash *slash)
     char *hash = NULL;
     char *remote_path = NULL;
 
-    optparse_t *parser = optparse_new("satdeploy rollback", "<app_name> -r <remote_path>");
+    optparse_t *parser = optparse_new("satdeploy rollback", "<remote path> [-n node] [-H hash]");
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: current csh node)");
-    optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path (required)");
+    optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote path (same as the positional)");
     optparse_add_string(parser, 'H', "hash", "HASH", &hash, "Specific backup hash to restore");
 
-    int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
+    const char *reordered[32];
+    int total = satdeploy_reorder_argv(slash->argc - 1,
+                                       (const char **)slash->argv + 1,
+                                       reordered, 32);
+    int argi = optparse_parse(parser, total, reordered);
     if (argi < 0) {
         optparse_del(parser);
         return SLASH_EINVAL;
     }
+    char *target_path = remote_path;
+    const char *cmd_label = "satdeploy rollback";
 
-    if (argi >= slash->argc - 1) {
-        printf("Error: app_name required\n");
-        optparse_help(parser, stdout);
+    /* argi indexes `reordered`, not slash->argv: options were hoisted ahead of
+     * the positionals. The positional is the app's remote path -- the same
+     * string push was given -- and the app name is derived from it, so there
+     * is one identifier for an app, not two. A bare name still works: its
+     * basename is itself. */
+    static char ident_name[128];
+    if (argi < total) {
+        target_path = (char *)reordered[argi];
+    }
+    if (target_path == NULL) {
+        printf("Error: which app? Give its remote path.\n");
+        printf("       e.g. %s /opt/myapp\n", cmd_label);
         optparse_del(parser);
         return SLASH_EUSAGE;
     }
-    app_name = slash->argv[argi + 1];
+    satdeploy_derive_app_name(target_path, ident_name, sizeof(ident_name));
+    app_name = ident_name;
     optparse_del(parser);
 
     if (node == 0) {
         node = slash_dfl_node;
     }
 
-    if (!remote_path || !remote_path[0]) {
+    remote_path = target_path;
+    if (!remote_path[0]) {
         char errmsg[256];
-        snprintf(errmsg, sizeof(errmsg), "No remote path given for '%s'; pass -r <path>", app_name);
+        snprintf(errmsg, sizeof(errmsg), "Empty remote path for '%s'", app_name);
         output_error(errmsg);
-        printf("Add it to ~/.satdeploy/config.yaml under apps/%s/remote\n", app_name);
         return SLASH_EINVAL;
     }
 
@@ -652,7 +755,7 @@ static int satdeploy_list_cmd(struct slash *slash)
 
     char *deploy_path = NULL;
 
-    optparse_t *parser = optparse_new("satdeploy list", "<app_name> [-r remote_path]");
+    optparse_t *parser = optparse_new("satdeploy list", "<remote path> [-n node]");
     optparse_add_help(parser);
     /* The agent dedups the "current" entry with its matching backup, so that
      * row's path is the .bak file and not the install slot. Naming the slot
@@ -660,19 +763,35 @@ static int satdeploy_list_cmd(struct slash *slash)
     optparse_add_string(parser, 'r', "remote", "PATH", &deploy_path, "Remote install path, for the deployed row");
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: current csh node)");
 
-    int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
+    const char *reordered[32];
+    int total = satdeploy_reorder_argv(slash->argc - 1,
+                                       (const char **)slash->argv + 1,
+                                       reordered, 32);
+    int argi = optparse_parse(parser, total, reordered);
     if (argi < 0) {
         optparse_del(parser);
         return SLASH_EINVAL;
     }
+    char *target_path = deploy_path;
+    const char *cmd_label = "satdeploy list";
 
-    if (argi >= slash->argc - 1) {
-        printf("Error: app_name required\n");
-        optparse_help(parser, stdout);
+    /* argi indexes `reordered`, not slash->argv: options were hoisted ahead of
+     * the positionals. The positional is the app's remote path -- the same
+     * string push was given -- and the app name is derived from it, so there
+     * is one identifier for an app, not two. A bare name still works: its
+     * basename is itself. */
+    static char ident_name[128];
+    if (argi < total) {
+        target_path = (char *)reordered[argi];
+    }
+    if (target_path == NULL) {
+        printf("Error: which app? Give its remote path.\n");
+        printf("       e.g. %s /opt/myapp\n", cmd_label);
         optparse_del(parser);
         return SLASH_EUSAGE;
     }
-    app_name = slash->argv[argi + 1];
+    satdeploy_derive_app_name(target_path, ident_name, sizeof(ident_name));
+    app_name = ident_name;
     optparse_del(parser);
 
 
@@ -697,7 +816,9 @@ static int satdeploy_list_cmd(struct slash *slash)
     }
 
     /* Print formatted version table */
-    char title[128];
+    /* app_name is up to 128 bytes (a derived basename), so the title buffer
+     * has to hold that plus the framing text. */
+    char title[160];
     snprintf(title, sizeof(title), "Versions for %s:", app_name);
     output_title(title);
 
@@ -743,24 +864,40 @@ static int satdeploy_logs_cmd(struct slash *slash)
     unsigned int lines = 100;
     char *app_name = NULL;
 
-    optparse_t *parser = optparse_new("satdeploy logs", "<app_name>");
+    optparse_t *parser = optparse_new("satdeploy logs", "<remote path> [-l lines]");
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: current csh node)");
     optparse_add_unsigned(parser, 'l', "lines", "NUM", 0, &lines, "Number of log lines (default: 100)");
 
-    int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
+    const char *reordered[32];
+    int total = satdeploy_reorder_argv(slash->argc - 1,
+                                       (const char **)slash->argv + 1,
+                                       reordered, 32);
+    int argi = optparse_parse(parser, total, reordered);
     if (argi < 0) {
         optparse_del(parser);
         return SLASH_EINVAL;
     }
+    char *target_path = NULL;
+    const char *cmd_label = "satdeploy logs";
 
-    if (argi >= slash->argc - 1) {
-        printf("Error: app_name required\n");
-        optparse_help(parser, stdout);
+    /* argi indexes `reordered`, not slash->argv: options were hoisted ahead of
+     * the positionals. The positional is the app's remote path -- the same
+     * string push was given -- and the app name is derived from it, so there
+     * is one identifier for an app, not two. A bare name still works: its
+     * basename is itself. */
+    static char ident_name[128];
+    if (argi < total) {
+        target_path = (char *)reordered[argi];
+    }
+    if (target_path == NULL) {
+        printf("Error: which app? Give its remote path.\n");
+        printf("       e.g. %s /opt/myapp\n", cmd_label);
         optparse_del(parser);
         return SLASH_EUSAGE;
     }
-    app_name = slash->argv[argi + 1];
+    satdeploy_derive_app_name(target_path, ident_name, sizeof(ident_name));
+    app_name = ident_name;
     optparse_del(parser);
 
     /* Load config for defaults */
@@ -813,36 +950,52 @@ static int satdeploy_version_cmd(struct slash *slash)
 static int satdeploy_help_cmd(struct slash *slash)
 {
     (void)slash;
-    printf("  Deploy files to embedded Linux targets.\n\n");
-    printf("Commands:\n");
-    printf("  config    Show current configuration.\n");
-    printf("  init      Interactive setup, creates config.yaml.\n");
-    printf("  list      List all versions of an app (deployed + backups).\n");
+    printf("  Deploy files to a satellite over a lossy link, verified on arrival.\n\n");
+    printf("Commands (an app is identified by its path on the target):\n");
+    printf("  push      Copy a file up and verify it:  push <local> <remote>\n");
+    printf("  status    Show what is deployed on the target.\n");
+    printf("  list      Versions at a remote path (deployed + backups).\n");
+    printf("  rollback  Restore the previous version at a remote path.\n");
     printf("  logs      Show logs for an app's service.\n");
-    printf("  push      Deploy one or more apps to a target.\n");
-    printf("  rollback  Rollback to a previous version.\n");
-    printf("  status    Show status of deployed apps and services.\n");
     printf("  version   Show APM version.\n");
     printf("\n");
     printf("Quick recipes:\n");
-    printf("  satdeploy push controller            # deploy one app from config\n");
-    printf("  satdeploy push -a                    # deploy every app\n");
-    printf("  satdeploy push -f ./bin/foo -r /opt/foo   # ad-hoc, no config entry\n");
-    printf("  satdeploy status                     # what's running on the target\n");
-    printf("  satdeploy list controller            # versions: deployed + backups\n");
-    printf("  satdeploy rollback controller        # back one version\n");
-    printf("  satdeploy logs controller -l 50      # last 50 service log lines\n");
+    printf("  satdeploy push ./bin/app /opt/app\n");
+    printf("  satdeploy push ./bin/app /opt/app -F      # force a re-deploy\n");
+    printf("  satdeploy status\n");
+    printf("  satdeploy list /opt/app\n");
+    printf("  satdeploy rollback /opt/app\n");
+    printf("  satdeploy logs /opt/app -l 50\n");
     printf("\n");
-    printf("Use -n <node> on any command to target a different CSP node.\n");
-    printf("Full reference: https://github.com/MahmoodSeoud/satDeploy/blob/main/docs/commands.md\n");
+    printf("Commands target csh's current node (set it once with `node <addr>`,\n");
+    printf("or override per command with -n <addr>).\n");
+    printf("\n");
+    printf("Like scp: source then destination. There is no config file and no\n");
+    printf("app-name argument -- the name is the destination's basename.\n");
+    printf("Walkthrough: docs/MANUAL.md\n");
     return SLASH_SUCCESS;
 }
 
+/*
+ * Line-buffer the shell's stdout. csh is interactive, but the operator often
+ * drives it through `script` or a pipe (the experiment harness does), where
+ * glibc picks full buffering and a command that blocks -- a push waits for the
+ * agent to verify -- shows an empty console for minutes, then dumps everything
+ * at once. Worse, if the wait is killed, its output is lost entirely, so a
+ * failure looks like the command did nothing at all.
+ */
+int apm_init(void)
+{
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    return 0;
+}
+
 slash_command_group(satdeploy, "Satellite file deployment");
+slash_command(satdeploy, satdeploy_help_cmd, NULL, "Deploy files to a satellite (run for help)");
 slash_command_sub(satdeploy, help, satdeploy_help_cmd, NULL, "Show this help message");
-slash_command_sub(satdeploy, push, satdeploy_deploy_cmd, "<app> [options]", "Deploy one or more apps to a target.");
-slash_command_sub(satdeploy, list, satdeploy_list_cmd, "<app>", "List all versions of an app (deployed + backups).");
-slash_command_sub(satdeploy, logs, satdeploy_logs_cmd, "<app> [-l lines]", "Show logs for an app's service.");
-slash_command_sub(satdeploy, rollback, satdeploy_rollback_cmd, "<app> [-H hash]", "Rollback to a previous version.");
+slash_command_sub(satdeploy, push, satdeploy_deploy_cmd, "<local path> <remote path> [-n node] [-F]", "Copy a file to the target and verify it.");
+slash_command_sub(satdeploy, list, satdeploy_list_cmd, "<remote path> [-n node]", "List all versions at a remote path (deployed + backups).");
+slash_command_sub(satdeploy, logs, satdeploy_logs_cmd, "<remote path> [-l lines]", "Show logs for an app's service.");
+slash_command_sub(satdeploy, rollback, satdeploy_rollback_cmd, "<remote path> [-H hash]", "Restore the previous version at a remote path.");
 slash_command_sub(satdeploy, status, satdeploy_status_cmd, NULL, "Show status of deployed apps and services.");
 slash_command_sub(satdeploy, version, satdeploy_version_cmd, NULL, "Show APM version.");
