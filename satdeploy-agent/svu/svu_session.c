@@ -203,6 +203,18 @@ int svu_client_run_hooked(uint16_t server_addr, uint32_t block_size, uint32_t mt
             if (ctrl_ok == 0) {
                 break;
             }
+            /* If only the RESPONSE leg was lost, the request DID reach the
+             * server -- and the server blasts for every request it receives.
+             * Retrying the original request verbatim therefore costs a full
+             * re-blast per retry (measured: 7x the artifact at 10% whole-link
+             * loss). Retries switch to the manifest-only form instead -- one
+             * empty interval, the same encoding the resume seed uses -- which
+             * blasts nothing. If it was the REQUEST leg that was lost, no
+             * blast was triggered and this round's verify simply re-requests
+             * the holes: the price is one extra round, not one extra artifact. */
+            req.nof_intervals = 1u;
+            req.intervals[0].start = 0u;
+            req.intervals[0].end = 0u;
             usleep(500000); /* 500 ms between attempts */
         }
         if (ctrl_ok != 0) {
