@@ -553,3 +553,28 @@ translate manually.
 
 **Depends on:** At least one pilot that currently uses Ansible/scripts and is willing
 to be the reference import target.
+
+## Fix the agent's session-state-scan busy-loop wedge
+
+**What:** The agent's session-state reconciliation spins CPU over stale/foreign
+entries in /var/lib/satdeploy/state until the CSP node goes deaf (process stays
+Running, rx starves). Add validation/expiry of state entries and a bounded scan.
+
+**Why:** A deployer that wedges on dirty persistent state is an operational
+hazard in orbit — no console exists to kill it. Caused the AGENT_FAILURE cell
+(smart_L0.30_s3) and three apparent "crashes" during the 2026-08-07 flatsat
+campaign.
+
+**Pros:** Reproducible WITHOUT the flatsat: seeded drop schedule + a polluted
+state dir on the loopback rig. Thesis threats section can gain "fixed in vX".
+**Cons:** New agent version stamp; revalidation run needed after the fix.
+
+**Context:** Root-caused 2026-08-07: clean state dir = 0:00 CPU steady;
+polluted (stale r2_* entries + 17 foreign app records) = minutes of CPU then
+deaf node. Evidence: csp-linksim captures/evidence/sd_*.log; diagnosis
+narrative in csp-linksim commit 795b30e and memory flatsat-agent-ops.
+Repro: populate /var/lib/satdeploy/state with missing-file entries, start
+agent, watch CPU climb in ps.
+
+**Depends on / blocked by:** Nothing technical; deprioritized until after
+thesis submission (eng-review D11, 2026-08-10).
