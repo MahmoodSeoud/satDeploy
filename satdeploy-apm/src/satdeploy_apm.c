@@ -342,14 +342,14 @@ static int deploy_single_app(unsigned int node, char *app_name,
     /* Validate required fields */
     if (!local_path) {
         printf("Error: No local file specified\n");
-        printf("       satdeploy push %s -n <node> -f <local path> -r <remote path>\n",
+        printf("       satdeploy upload %s -n <node> -f <local path> -r <remote path>\n",
                app_name);
         return SLASH_EUSAGE;
     }
 
     if (!remote_path) {
         printf("Error: No remote path specified\n");
-        printf("       satdeploy push %s -n <node> -f %s -r <remote path>\n",
+        printf("       satdeploy upload %s -n <node> -f %s -r <remote path>\n",
                app_name, local_path);
         return SLASH_EUSAGE;
     }
@@ -388,7 +388,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
              * -F skips the probe entirely, which is the escape hatch when the
              * agent IS there and the link merely ate the packet. */
             printf("Aborting: no reply to the pre-flight check on node %u.\n", node);
-            printf("          Pass -F to push anyway without checking.\n");
+            printf("          Pass -F to upload anyway without checking.\n");
             return SLASH_EIO;
         }
         if (status_resp->success) {
@@ -473,7 +473,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
             .app = app_name,
             .file_hash = checksum,
             .remote_path = remote_path,
-            .action = "push",
+            .action = "upload",
             .success = 0,
             .error_message = "No response from agent (timeout)",
             .transport = "csp",
@@ -489,7 +489,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
             .app = app_name,
             .file_hash = checksum,
             .remote_path = remote_path,
-            .action = "push",
+            .action = "upload",
             .success = 0,
             .error_message = resp->error_message,
             .transport = "csp",
@@ -509,7 +509,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
         .app = app_name,
         .file_hash = checksum,
         .remote_path = remote_path,
-        .action = "push",
+        .action = "upload",
         .success = 1,
         .backup_path = resp->backup_path,
         .transport = "csp",
@@ -565,7 +565,7 @@ static int satdeploy_deploy_cmd(struct slash *slash)
      * we just need a place to land app_name when ad-hoc with -f/-r. */
     static char derived_name[128];
 
-    /* Positional form: `satdeploy push <local> <remote>`. -f/-r remain accepted
+    /* Positional form: `satdeploy upload <local> <remote>`. -f/-r remain accepted
      * for scripts that already use them; a positional only fills a slot the
      * flags left empty. A third positional is the pre-v2 app-name argument,
      * which is now derived and therefore ignored. */
@@ -584,7 +584,7 @@ static int satdeploy_deploy_cmd(struct slash *slash)
             app_name = derived_name;
         } else {
             printf("Error: need a local file and a remote path.\n");
-            printf("       satdeploy push <local path> <remote path> [-n node]\n");
+            printf("       satdeploy upload <local path> <remote path> [-n node]\n");
             optparse_del(parser);
             return SLASH_EUSAGE;
         }
@@ -993,7 +993,11 @@ int apm_init(void)
 slash_command_group(satdeploy, "Satellite file deployment");
 slash_command(satdeploy, satdeploy_help_cmd, NULL, "Deploy files to a satellite (run for help)");
 slash_command_sub(satdeploy, help, satdeploy_help_cmd, NULL, "Show this help message");
-slash_command_sub(satdeploy, push, satdeploy_deploy_cmd, "<local path> <remote path> [-n node] [-F]", "Copy a file to the target and verify it.");
+slash_command_sub(satdeploy, upload, satdeploy_deploy_cmd, "<local path> <remote path> [-n node] [-F]", "Copy a file to the target and verify it.");
+/* Retained alias. The command was named `push` when the recorded experiments ran,
+ * and the committed sweep scripts still invoke it that way; renaming without an
+ * alias would make that data unreproducible. */
+slash_command_sub(satdeploy, push, satdeploy_deploy_cmd, "<local path> <remote path> [-n node] [-F]", "Deprecated alias for `satdeploy upload`.");
 slash_command_sub(satdeploy, list, satdeploy_list_cmd, "<remote path> [-n node]", "List all versions at a remote path (deployed + backups).");
 slash_command_sub(satdeploy, logs, satdeploy_logs_cmd, "<remote path> [-l lines]", "Show logs for an app's service.");
 slash_command_sub(satdeploy, rollback, satdeploy_rollback_cmd, "<remote path> [-H hash]", "Restore the previous version at a remote path.");
